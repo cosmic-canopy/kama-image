@@ -1,0 +1,94 @@
+// The gate's sweep (AGENTS.image.md § Decided, 2): every single-bit flip and every truncation of every fixture libpng
+// decodes (a crafted one up to 3 KB), each one decoded. A decode answers an image or an error and never ends the program, so a run that reaches its
+// last line found no trap. `imagetests --sweep` runs it alone, in debug and in release, since a release build wraps an
+// overflow that debug traps.
+//
+// A flip inside a chunk's type or data has that chunk's CRC put right before the decode, as libpng's OSS-Fuzz harness
+// has libpng ignore CRCs: otherwise nearly every flip is refused at the CRC, and the code behind it (the inflate, the
+// filters, the palette, the colour chunks) never meets a broken file. A flip in a length or a CRC is left as it is.
+
+import {
+    core::println, std::fs::readFile, std::io::IoError, std::collections::DynamicArray, std::digest::crc32::Crc32,
+    std::time::monotonicNow, std::time::Instant,
+    image::Image, image::ImageError, image::DecodeOptions, image::png::decode,
+    Run, Table,
+};
+
+export { sweep };
+
+fn uint32 be32(const ref DynamicArray<uint8> b, isize at) {
+    return (cast<uint32>(b[at]) << 24) | (cast<uint32>(b[at + 1]) << 16) | (cast<uint32>(b[at + 2]) << 8) | cast<uint32>(b[at + 3]);
+}
+
+// The chunk whose type or data holds byte `at`: its start, or -1 when `at` is in a length, a CRC or the signature.
+fn isize chunkAt(const ref DynamicArray<uint8> starts, const ref DynamicArray<uint8> file, isize at) {
+    isize found = -1;
+    for (isize k = 0; k < starts.length() / 4; k = k + 1) {
+        isize start = cast<isize>(be32(b: starts, at: k * 4));
+        isize len = cast<isize>(be32(b: file, at: start));
+        if (at >= start + 4 && at < start + 8 + len) { found = start; }
+    }
+    return found;
+}
+
+// Writes the right CRC for the chunk at `start` into `s`.
+fn void fixCrc(ref DynamicArray<uint8> s, isize start) {
+    isize len = cast<isize>(be32(b: s, at: start));
+    Crc32 c = Crc32.make();
+    c.update(bytes: s.slice(from: start + 4, count: len + 4));
+    uint32 v = c.finish();
+    isize at = start + 8 + len;
+    s[at] = truncate<uint8>(v >> 24); s[at + 1] = truncate<uint8>(v >> 16); s[at + 2] = truncate<uint8>(v >> 8); s[at + 3] = truncate<uint8>(v);
+}
+
+fn void sweep(ref Run run, const ref Table t) {
+    DecodeOptions options = DecodeOptions.defaults();
+    Instant t0 = monotonicNow();
+    int64 files = 0;
+    int64 bytes = 0;
+    int64 decoded = 0;
+    int64 refused = 0;
+    for (isize i = 0; i < t.count(); i = i + 1) {
+        string name = t.nameAt(at: i);
+        if (!t.decodesAt(at: i)) { continue; }
+        string dir = name.startsWith(prefix: "h") ? "crafted" : "pngsuite";
+        string path = "fixtures/${dir}/${name}";
+        Result<DynamicArray<uint8>, IoError> read = readFile(path: path);
+        if (read.isErr()) { run.fail(name: name, why: "cannot read ${path}"); continue; }
+        DynamicArray<uint8> file = match (give read) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+        isize n = file.length();
+        // the crafted images past 3 KB (h8a, h16a, hcicp-pq) repeat what PngSuite's small files reach, at many times the time
+        if (dir == "crafted" && n > 3000) { continue; }
+        // where each chunk starts, 4 bytes each, in a file libpng decodes, so every chunk is whole
+        DynamicArray<uint8> starts = DynamicArray.empty();
+        isize walk = 8;
+        while (walk + 12 <= n) {
+            uint32 w = cast<uint32>(walk);
+            starts.add(item: truncate<uint8>(w >> 24)); starts.add(item: truncate<uint8>(w >> 16));
+            starts.add(item: truncate<uint8>(w >> 8)); starts.add(item: truncate<uint8>(w));
+            walk = walk + 12 + cast<isize>(be32(b: file, at: walk));
+        }
+        DynamicArray<uint8> s = copy file;
+        for (isize at = 0; at < n; at = at + 1) {
+            isize owner = chunkAt(starts: starts, file: file, at: at);
+            for (int32 bit = 0; bit < 8; bit = bit + 1) {
+                uint8 mask = truncate<uint8>(1 << bit);
+                s[at] = s[at] ^ mask;
+                if (owner >= 0) { fixCrc(s: ref s, start: owner); }
+                Result<Image, ImageError> r = decode(bytes: s.view(), options: options);
+                if (r.isOk()) { decoded = decoded + 1; } else { refused = refused + 1; }
+                s[at] = s[at] ^ mask;
+                if (owner >= 0) { fixCrc(s: ref s, start: owner); }
+            }
+        }
+        for (isize cut = 0; cut < n; cut = cut + 1) {
+            Result<Image, ImageError> r = decode(bytes: file.slice(from: 0, count: cut), options: options);
+            if (r.isOk()) { decoded = decoded + 1; } else { refused = refused + 1; }
+        }
+        files = files + 1;
+        bytes = bytes + cast<int64>(n);
+        run.pass();
+    }
+    int64 ms = t0.elapsed().asMillis();
+    println(s: "image sweep: ${files} files, ${bytes} bytes, ${decoded} decoded and ${refused} refused, in ${ms} ms");
+}

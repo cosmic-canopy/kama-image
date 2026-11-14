@@ -7,7 +7,7 @@
 // 1 when any failed.
 
 import {
-    core::println,
+    core::println, core::env::args,
     std::fs::readFile, std::io::IoError,
     std::collections::DynamicArray,
     std::digest::crc32::crc32,
@@ -15,7 +15,7 @@ import {
     image::Primaries, image::Transfer, image::RenderingIntent, image::Cicp, image::MasteringDisplay, image::ContentLight,
     image::DecodeOptions,
     image::png::decode,
-    Table, fillExpected, strictCases, colourCases,
+    Table, fillExpected, strictCases, colourCases, sweep,
 };
 
 export { Run };
@@ -210,8 +210,27 @@ fn void fixtures(ref Run run) {
     }
 }
 
+// Whether the command line names `flag`.
+fn bool named(const ref string flag) {
+    for (int32 i = 0; i < 16; i = i + 1) {
+        Optional<string> a = args().get(at: i);
+        bool hit = match (a) { case Some(value: s): s == flag; case None: false; };
+        if (hit) { return true; }
+    }
+    return false;
+}
+
 fn uint8 main() {
     Run run = Run.make();
+    if (named(flag: "--sweep")) {
+        Table t = Table.make();
+        fillExpected(t: ref t);
+        sweep(run: ref run, t: t);
+        int32 swept = run.count();
+        int32 lost = run.failures();
+        println(s: "image tests: ${swept} cases, ${lost} failed");
+        return lost == 0 ? 0 : 1;
+    }
     fixtures(run: ref run);
     strictCases(run: ref run);
     colourCases(run: ref run);

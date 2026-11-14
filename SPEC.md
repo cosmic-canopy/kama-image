@@ -174,3 +174,9 @@ fixtures embedded. 259 cases on each leg:
   - a gAMA of 0, out of place, or repeated;
   - Exif repeated, short, or past `maxBytes`;
   - mDCV and cLLI of the wrong length.
+- **The sweep** (`tests/src/sweep.kama`, `imagetests --sweep`), natively in debug and in release: every single-bit flip
+  and every truncation of every fixture libpng decodes (crafted ones up to 3 KB), 1,165,833 decodes, with no trap. A flip
+  inside a chunk's type or data has the chunk's CRC put right first, as libpng's OSS-Fuzz harness has libpng ignore
+  CRCs, so the flip reaches the code behind the check. The debug build compiles the package and std at the release
+  level (`debug.optimize` in `tests/kama.json`), which keeps kama's overflow traps and bounds checks: about 23 s a leg
+  on the Windows box, where `-O0` took 405 s.

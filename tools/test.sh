@@ -2,6 +2,9 @@
 # tools/test.sh — @kama/image's gate: the roadmap's shape, `kama check` on the package and on its tests, then the tests
 # program built debug and release and run natively, and built for the web and run under node, where its fixtures are
 # embedded. Every leg holds every fixture to libpng's answer (tests/src/expected.kama, from tools/reference/run.sh).
+# Natively, in debug and in release, the sweep then decodes every single-bit flip and every truncation of every fixture
+# libpng decodes, and fails on a trap (tests/src/sweep.kama). tests/kama.json compiles the package and std at the
+# release level in a debug build (debug.optimize), which keeps kama's overflow traps and bounds checks.
 #
 #   tools/test.sh
 #
@@ -49,6 +52,12 @@ for mode in debug release; do
     (cd tests && "./out/native-$mode/imagetests$EXE") > "$log" 2>&1 || true
     grep -E '^(FAIL|image tests:)' "$log" || true
     counted "$log" "native $mode"
+    # every single-bit flip and every truncation of every fixture libpng decodes; a trap ends the run before its count
+    step "the sweep, native $mode"
+    log="tests/out/sweep-$mode.log"
+    (cd tests && "./out/native-$mode/imagetests$EXE" --sweep) > "$log" 2>&1 || true
+    grep -E '^(FAIL|image (tests|sweep):)' "$log" || true
+    counted "$log" "sweep, native $mode"
 done
 
 step "wasm, under node"
