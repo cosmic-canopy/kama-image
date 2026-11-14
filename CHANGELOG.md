@@ -5,4 +5,17 @@ package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- Seeded with `kama seed` on kama 0.9.947 (2026-11-14). Nothing is built yet.
+### Added
+
+- `Image`: a pixel format named as WebGPU names its texture formats, an alpha mode, a colour space and typed samples,
+  handed out as bytes or by type with no copy; built from samples with `fromSamples8`, `fromSamples16` and
+  `fromSamplesF32`.
+- `ImageError` and `ImageErrorKind`: what a decode refuses, at which byte and in which chunk.
+- `DecodeOptions` and `DecodeLimits`: what a decode may allocate, the longest chunk it reads, and how many ancillary
+  chunks a file may hold.
+- `image::png::decode`: every colour type and bit depth, palettes, `tRNS` and Adam7 interlacing, strict, held to
+  libpng's pixels on PngSuite and crafted cases.
+
+### Notes
+
+- Seeded with `kama seed` on kama 0.9.947 (2026-11-14). Requires kama 0.9.949.

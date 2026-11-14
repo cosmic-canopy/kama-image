@@ -1,0 +1,46 @@
+// What an image's numbers mean as colour (AGENTS.image.md § Decided, 1): its primaries and its transfer, so a renderer
+// never guesses whether values are sRGB-encoded or linear. A file that says nothing is unspecified, never assumed.
+
+export { ColorSpace, Primaries, Transfer };
+
+// The primaries and white point, by the names ITU-T H.273 gives them (PNG's cICP chunk).
+@nonExhaustive
+type enum Primaries {
+    Unspecified,
+    Bt709,          // sRGB's, and BT.709's
+    DisplayP3,
+    Bt2020;
+}
+
+// How the stored numbers map to light.
+@nonExhaustive
+type enum Transfer {
+    Unspecified,
+    Srgb,           // sRGB's curve
+    Linear,
+    Pq,             // SMPTE ST 2084, HDR
+    Hlg;            // ARIB STD-B67, HDR
+}
+
+type value ColorSpace {
+    public Primaries primaries;
+    public Transfer transfer;
+
+    public ctor make(Primaries primaries, Transfer transfer) {
+        this.primaries = primaries;
+        this.transfer = transfer;
+    }
+    // What a file that names no colour space has.
+    public ctor unspecified() {
+        this.primaries = Primaries::Unspecified;
+        this.transfer = Transfer::Unspecified;
+    }
+    public ctor srgb() {
+        this.primaries = Primaries::Bt709;
+        this.transfer = Transfer::Srgb;
+    }
+    public ctor linearSrgb() {
+        this.primaries = Primaries::Bt709;
+        this.transfer = Transfer::Linear;
+    }
+}

@@ -1,0 +1,22 @@
+// What a decode is given besides the bytes (AGENTS.image.md § Decided, 2): the limits it holds a stranger's file to,
+// each one a caller may raise or lower, as kama-gpu's `DeviceOptions` holds a device's limits.
+
+export { DecodeOptions, DecodeLimits };
+
+type value DecodeLimits {
+    // What a decode may allocate in all: the image's samples and everything it holds on the way (the Rust `image`
+    // crate's default).
+    public int64 maxBytes = 536870912;
+    // The longest chunk other than image data a decode reads (libpng's default).
+    public int64 maxChunkBytes = 8000000;
+    // How many ancillary chunks a decode reads before it refuses the file (libpng's default for text and unknown ones).
+    public int64 maxAncillaryChunks = 1000;
+
+    public ctor defaults() { }
+}
+
+type value DecodeOptions {
+    public DecodeLimits limits = DecodeLimits.defaults();
+
+    public ctor defaults() { }
+}

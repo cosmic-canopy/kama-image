@@ -1,14 +1,126 @@
-// The library surface. This file sits at the top of `source`, so it is in the project's ROOT module —
-// the one `kama.json`'s `name` names — and `export` is what importers can see:
-// `import { image::answer };`
+// @kama/image's root module: the decoded image every format gives and takes (AGENTS.image.md § Decided, 1).
 //
-// To add a module, make a folder under `source` and list it in `modules`. A folder with no entry is not
-// a module: its files belong to the nearest listed folder above them, so nothing joins your API by
-// accident.
+// An `Image` is its size, a pixel format named as WebGPU names the texture format it uploads to, an alpha mode and a
+// colour space, at the file's own precision: a 16-bit PNG stays 16-bit. Its samples are kept typed (`uint8`, `uint16`
+// in the host's order, a half float's bits as `uint16`, `float32`) and handed out as they are, with no copy:
+//
+//   borrow img.bytes() as b { queue.writeTexture(…, data: b); }     // every format, as bytes
+//   borrow img.samples16() as s { uint16 first = s[0]; }            // a 16-bit format's samples, typed
 
-export { answer };
+import { std::collections::FixedArray, std::collections::ConstView, ImageError, ImageErrorKind, ColorSpace };
 
-fn int32 answer()
-{
-    return 42;
+export { Image, PixelFormat, AlphaMode, Samples8, Samples16, SamplesF32 };
+
+// The formats an image holds, each named as the WebGPU texture format it uploads to.
+@nonExhaustive
+type enum PixelFormat {
+    R8Unorm, Rg8Unorm, Rgba8Unorm,
+    R16Unorm, Rg16Unorm, Rgba16Unorm,
+    Rgba16Float,
+    Rgba32Float;
+
+    public const fn isize channels() {
+        return match (this) {
+            case R8Unorm: 1; case Rg8Unorm: 2; case Rgba8Unorm: 4;
+            case R16Unorm: 1; case Rg16Unorm: 2; case Rgba16Unorm: 4;
+            case Rgba16Float: 4;
+            case Rgba32Float: 4;
+        };
+    }
+    // The bytes one sample takes: 1, 2 or 4.
+    public const fn isize sampleBytes() {
+        return match (this) {
+            case R8Unorm: 1; case Rg8Unorm: 1; case Rgba8Unorm: 1;
+            case R16Unorm: 2; case Rg16Unorm: 2; case Rgba16Unorm: 2;
+            case Rgba16Float: 2;
+            case Rgba32Float: 4;
+        };
+    }
+}
+
+// Whether an image's colour is already multiplied by its alpha. A PNG is straight, or opaque when it has no alpha.
+type enum AlphaMode { Opaque, Straight, Premultiplied }
+
+// The typed windows on an image's samples. Each is empty unless the image holds samples of its type.
+@viewable type contract Samples8 for resource { const fn ConstView<uint8> samples8(); }
+@viewable type contract Samples16 for resource { const fn ConstView<uint16> samples16(); }
+@viewable type contract SamplesF32 for resource { const fn ConstView<float32> samplesF32(); }
+
+// Whether `n` samples are exactly `width` × `height` × `channels`, without a product that could overflow.
+fn bool fits(isize width, isize height, isize channels, isize n) {
+    if (width < 1 || height < 1) { return false; }
+    if (width > n / height) { return false; }
+    isize pixels = width * height;
+    if (pixels > n / channels) { return false; }
+    return pixels * channels == n;
+}
+
+type resource Image implements BytesViewable<ConstView<uint8>>, Samples8, Samples16, SamplesF32 {
+    isize w;
+    isize h;
+    PixelFormat fmt;
+    AlphaMode alphaMode;
+    ColorSpace space;
+    FixedArray<uint8> s8;
+    FixedArray<uint16> s16;
+    FixedArray<float32> s32;
+
+    ctor make(isize width, isize height, PixelFormat format, AlphaMode alpha, ColorSpace colorSpace) {
+        this.w = width;
+        this.h = height;
+        this.fmt = format;
+        this.alphaMode = alpha;
+        this.space = colorSpace;
+        this.s8 = FixedArray.make(size: 0);
+        this.s16 = FixedArray.make(size: 0);
+        this.s32 = FixedArray.make(size: 0);
+    }
+
+    // An image of 8-bit samples (`R8Unorm`, `Rg8Unorm`, `Rgba8Unorm`), row by row from the top, `samples` holding
+    // exactly width × height × channels of them.
+    public ctor Result<Image, ImageError> fromSamples8(isize width, isize height, PixelFormat format, AlphaMode alpha,
+                                                      ColorSpace colorSpace, FixedArray<uint8> samples) {
+        if (format.sampleBytes() != 1 || !fits(width: width, height: height, channels: format.channels(), n: samples.length())) {
+            return Result::Err(error: ImageError.make(kind: ImageErrorKind::Samples, at: -1, chunk: 0));
+        }
+        Image img = Image.make(width: width, height: height, format: format, alpha: alpha, colorSpace: colorSpace);
+        img.s8 = give samples;
+        return Result::Ok(value: give img);
+    }
+    // An image of 16-bit samples (`R16Unorm`, `Rg16Unorm`, `Rgba16Unorm`, or `Rgba16Float`'s bits), in the host's order.
+    public ctor Result<Image, ImageError> fromSamples16(isize width, isize height, PixelFormat format, AlphaMode alpha,
+                                                       ColorSpace colorSpace, FixedArray<uint16> samples) {
+        if (format.sampleBytes() != 2 || !fits(width: width, height: height, channels: format.channels(), n: samples.length())) {
+            return Result::Err(error: ImageError.make(kind: ImageErrorKind::Samples, at: -1, chunk: 0));
+        }
+        Image img = Image.make(width: width, height: height, format: format, alpha: alpha, colorSpace: colorSpace);
+        img.s16 = give samples;
+        return Result::Ok(value: give img);
+    }
+    // An image of `float32` samples (`Rgba32Float`).
+    public ctor Result<Image, ImageError> fromSamplesF32(isize width, isize height, PixelFormat format, AlphaMode alpha,
+                                                        ColorSpace colorSpace, FixedArray<float32> samples) {
+        if (format.sampleBytes() != 4 || !fits(width: width, height: height, channels: format.channels(), n: samples.length())) {
+            return Result::Err(error: ImageError.make(kind: ImageErrorKind::Samples, at: -1, chunk: 0));
+        }
+        Image img = Image.make(width: width, height: height, format: format, alpha: alpha, colorSpace: colorSpace);
+        img.s32 = give samples;
+        return Result::Ok(value: give img);
+    }
+
+    public const fn isize width() { return this.w; }
+    public const fn isize height() { return this.h; }
+    public const fn PixelFormat format() { return this.fmt; }
+    public const fn AlphaMode alpha() { return this.alphaMode; }
+    public const fn ColorSpace colorSpace() { return this.space; }
+
+    // Every sample as bytes, in the host's order: what a texture upload takes.
+    public const fn ConstView<uint8> bytes() {
+        if (this.fmt.sampleBytes() == 2) { return this.s16.view().bytes(); }
+        if (this.fmt.sampleBytes() == 4) { return this.s32.view().bytes(); }
+        return this.s8.view();
+    }
+    public const fn ConstView<uint8> samples8() { return this.s8.view(); }
+    public const fn ConstView<uint16> samples16() { return this.s16.view(); }
+    public const fn ConstView<float32> samplesF32() { return this.s32.view(); }
 }

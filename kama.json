@@ -6,13 +6,14 @@
   "repository": "https://github.com/cosmic-canopy/kama-image",
   "keywords": ["image", "png", "codec", "decode", "encode"],
   "kind": "library",
-  "kama": ">=0.9.947",
+  "kama": ">=0.9.949",
   "publish": {
     "exclude": [
       ".claude/", "AGENTS.md", "AGENTS.package.md", "AGENTS.image.md", "CLAUDE.md", "KAMA_GAPS.md"
     ]
   },
   "modules": {
-    ".": { "visibility": "public" }
+    ".": { "visibility": "public" },
+    "png": { "visibility": "public" }
   }
 }

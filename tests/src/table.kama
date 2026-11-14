@@ -1,0 +1,60 @@
+// What each fixture should decode to, filled by expected.kama (generated from libpng by tools/reference/run.sh).
+
+import { std::collections::DynamicArray, image::PixelFormat, image::AlphaMode, image::ImageErrorKind };
+
+export { Table };
+
+type resource Table {
+    DynamicArray<string> names;
+    DynamicArray<bool> decodes;
+    DynamicArray<isize> widths;
+    DynamicArray<isize> heights;
+    DynamicArray<PixelFormat> formats;
+    DynamicArray<AlphaMode> alphas;
+    DynamicArray<uint32> crcs;
+    DynamicArray<ImageErrorKind> kinds;
+
+    public ctor make() {
+        this.names = DynamicArray.empty();
+        this.decodes = DynamicArray.empty();
+        this.widths = DynamicArray.empty();
+        this.heights = DynamicArray.empty();
+        this.formats = DynamicArray.empty();
+        this.alphas = DynamicArray.empty();
+        this.crcs = DynamicArray.empty();
+        this.kinds = DynamicArray.empty();
+    }
+
+    // A fixture libpng decodes: its size, format, alpha, and the CRC-32 of its samples as `Image.bytes()` gives them.
+    public fn void decoded(string name, isize width, isize height, PixelFormat format, AlphaMode alpha, uint32 crc) {
+        this.names.add(item: give name);
+        this.decodes.add(item: true);
+        this.widths.add(item: width);
+        this.heights.add(item: height);
+        this.formats.add(item: format);
+        this.alphas.add(item: alpha);
+        this.crcs.add(item: crc);
+        this.kinds.add(item: ImageErrorKind::Unsupported);
+    }
+    // A fixture libpng refuses, and the kind of error its words name.
+    public fn void refused(string name, ImageErrorKind kind) {
+        this.names.add(item: give name);
+        this.decodes.add(item: false);
+        this.widths.add(item: 0);
+        this.heights.add(item: 0);
+        this.formats.add(item: PixelFormat::Rgba8Unorm);
+        this.alphas.add(item: AlphaMode::Opaque);
+        this.crcs.add(item: 0);
+        this.kinds.add(item: kind);
+    }
+
+    public const fn isize count() { return this.names.length(); }
+    public const fn string nameAt(isize at) { return copy this.names[at]; }
+    public const fn bool decodesAt(isize at) { return this.decodes[at]; }
+    public const fn isize widthAt(isize at) { return this.widths[at]; }
+    public const fn isize heightAt(isize at) { return this.heights[at]; }
+    public const fn PixelFormat formatAt(isize at) { return this.formats[at]; }
+    public const fn AlphaMode alphaAt(isize at) { return this.alphas[at]; }
+    public const fn uint32 crcAt(isize at) { return this.crcs[at]; }
+    public const fn ImageErrorKind kindAt(isize at) { return this.kinds[at]; }
+}

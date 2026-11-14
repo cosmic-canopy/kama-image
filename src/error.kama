@@ -1,0 +1,85 @@
+// What a decode refuses, and where (AGENTS.image.md § Decided, 2): every error names what failed, the byte of the file
+// it failed at, and the chunk it was in, when there is one. A decode never ends the program: a stranger's file that
+// breaks the format is one of these.
+
+export { ImageError, ImageErrorKind, chunkCode };
+
+// What failed. New kinds may come with new formats, so outside this package a `match` on a kind needs `case _:`.
+@nonExhaustive
+type enum ImageErrorKind {
+    Signature,      // the file does not start as the format's files start
+    Truncated,      // the file ends inside something it began
+    ChunkType,      // a chunk's type is not four ASCII letters
+    ChunkCrc,       // a critical chunk's CRC does not match its bytes
+    ChunkOrder,     // a chunk where the format allows none: a header that is not first, image data missing or split, a second palette
+    Header,         // the image's header holds a value the format does not allow
+    Palette,        // a palette or its transparency the image cannot use, or a pixel naming an entry past its end
+    Data,           // the compressed image data is malformed, or holds more or fewer bytes than the image needs
+    DataChecksum,   // the compressed image data's own checksum (zlib's Adler-32) does not match it
+    Limit,          // the decode would pass one of its `DecodeLimits`
+    Unsupported,    // a critical part of the file this decoder does not know, such as an unknown critical chunk
+    Samples;        // an image built from samples that do not fit its size or its format
+
+    public const fn string name() {
+        return match (this) {
+            case Signature: "signature";
+            case Truncated: "truncated";
+            case ChunkType: "chunk type";
+            case ChunkCrc: "chunk CRC";
+            case ChunkOrder: "chunk order";
+            case Header: "header";
+            case Palette: "palette";
+            case Data: "image data";
+            case DataChecksum: "image data checksum";
+            case Limit: "limit";
+            case Unsupported: "unsupported";
+            case Samples: "samples";
+        };
+    }
+}
+
+// A chunk's four-letter type as the number PNG stores, read big-endian: `chunkCode(text: "IDAT")`.
+fn uint32 chunkCode(const ref string text) {
+    uint32 v = 0;
+    borrow text.bytes() as b { foreach (uint8 c in b) { v = (v << 8) | cast<uint32>(c); } }
+    return v;
+}
+
+fn string letters() { return "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"; }
+
+fn string letter(uint32 c) {
+    if (c >= 65 && c <= 90) { isize i = cast<isize>(c - 65); return letters().substring(start: i, end: i + 1); }
+    if (c >= 97 && c <= 122) { isize i = cast<isize>(c - 97 + 26); return letters().substring(start: i, end: i + 1); }
+    return "?";
+}
+
+type value ImageError implements Error {
+    ImageErrorKind what;
+    int64 offset;
+    uint32 chunkType;
+
+    // `at` is the byte of the file it failed at (-1 when it is no one byte's), and `chunk` the chunk's type (0 for none).
+    public ctor make(ImageErrorKind kind, int64 at, uint32 chunk) {
+        this.what = kind;
+        this.offset = at;
+        this.chunkType = chunk;
+    }
+
+    public const fn ImageErrorKind kind() { return this.what; }
+    public const fn int64 at() { return this.offset; }
+    public const fn uint32 chunk() { return this.chunkType; }
+
+    // "chunk CRC in IDAT at byte 57"
+    public const fn string message() {
+        string s = this.what.name();
+        if (this.chunkType != 0) {
+            s = s + " in " + letter(c: (this.chunkType >> 24) & 0xffui32) + letter(c: (this.chunkType >> 16) & 0xffui32)
+                + letter(c: (this.chunkType >> 8) & 0xffui32) + letter(c: this.chunkType & 0xffui32);
+        }
+        if (this.offset >= 0) {
+            int64 at = this.offset;
+            s = s + " at byte ${at}";
+        }
+        return s;
+    }
+}

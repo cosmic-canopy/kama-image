@@ -1,0 +1,337 @@
+// The refusals no fixture reaches, each on a PNG built here byte by byte (AGENTS.image.md § Decided, 2): the limits,
+// the chunk rules, image data that is malformed or the wrong length, and where this decoder is stricter than libpng
+// (a palette in a grey image, which libpng drops). Each names the kind it must be refused as, and where it can, the byte.
+
+import {
+    std::collections::DynamicArray, std::collections::FixedArray,
+    std::compress::zlib::ZlibWriter, std::compress::deflate::DeflateLevel, std::io::StringWriter,
+    std::digest::crc32::Crc32,
+    image::Image, image::ImageError, image::ImageErrorKind, image::PixelFormat, image::AlphaMode, image::ColorSpace,
+    image::DecodeOptions, image::chunkCode,
+    image::png::decode,
+    Run,
+};
+
+export { strictCases };
+
+fn void put32(ref DynamicArray<uint8> b, uint32 v) {
+    b.add(item: truncate<uint8>(v >> 24));
+    b.add(item: truncate<uint8>(v >> 16));
+    b.add(item: truncate<uint8>(v >> 8));
+    b.add(item: truncate<uint8>(v));
+}
+
+// A chunk: its length, type, data and CRC (wrong when `badCrc`).
+fn void chunk(ref DynamicArray<uint8> png, const ref string kind, const ref DynamicArray<uint8> data, bool badCrc) {
+    put32(b: ref png, v: cast<uint32>(data.length()));
+    isize start = png.length();
+    put32(b: ref png, v: chunkCode(text: kind));
+    png.addAll(items: data.view());
+    Crc32 c = Crc32.make();
+    c.update(bytes: png.slice(from: start, count: png.length() - start));
+    put32(b: ref png, v: badCrc ? c.finish() ^ 1ui32 : c.finish());
+}
+
+fn DynamicArray<uint8> signature() {
+    DynamicArray<uint8> b = DynamicArray.empty();
+    InlineArray<uint8>#(8) sig = [137, 80, 78, 71, 13, 10, 26, 10];
+    for (isize i = 0; i < 8; i = i + 1) { b.add(item: sig[i]); }
+    return give b;
+}
+
+fn DynamicArray<uint8> header(uint32 w, uint32 h, uint8 depth, uint8 colourType) {
+    return headerWith(w: w, h: h, depth: depth, colourType: colourType, compression: 0, filter: 0, interlace: 0);
+}
+
+fn DynamicArray<uint8> headerWith(uint32 w, uint32 h, uint8 depth, uint8 colourType, uint8 compression, uint8 filter, uint8 interlace) {
+    DynamicArray<uint8> d = DynamicArray.empty();
+    put32(b: ref d, v: w);
+    put32(b: ref d, v: h);
+    d.add(item: depth); d.add(item: colourType); d.add(item: compression); d.add(item: filter); d.add(item: interlace);
+    return give d;
+}
+
+fn DynamicArray<uint8> greyKey(uint8 key) {
+    DynamicArray<uint8> k = DynamicArray.empty();
+    k.add(item: 0); k.add(item: key);
+    return give k;
+}
+
+// A 4x4 grey file of 9s with tRNS chunks where they are asked for: `before` before the data (a bad CRC on the first when
+// `badFirst`, a second with key 5 when `twice`), `after` after it. Answers whether it decoded straight with pixel 0's alpha 0.
+fn int32 keyed(bool before, bool badFirst, bool twice, bool after) {
+    DynamicArray<uint8> png = signature();
+    chunk(png: ref png, kind: "IHDR", data: header(w: 4ui32, h: 4ui32, depth: 8, colourType: 0), badCrc: false);
+    if (before) { chunk(png: ref png, kind: "tRNS", data: greyKey(key: 9), badCrc: badFirst); }
+    if (twice) { chunk(png: ref png, kind: "tRNS", data: greyKey(key: 5), badCrc: false); }
+    chunk(png: ref png, kind: "IDAT", data: deflated(raw: rowsOf(rows: 4, rowBytes: 4, filter: 0, fill: 9)), badCrc: false);
+    if (after) { chunk(png: ref png, kind: "tRNS", data: greyKey(key: 9), badCrc: false); }
+    chunk(png: ref png, kind: "IEND", data: empty(), badCrc: false);
+    Result<Image, ImageError> r = decode(bytes: png.view(), options: DecodeOptions.defaults());
+    return match (give r) {
+        case Ok(value: img): {
+            uint8 a = 255;
+            borrow img.samples8() as s { a = s[3]; }
+            := img.alpha() == AlphaMode::Straight && a == 0 ? 1 : 0;
+        }
+        case Err(error: e): -1;
+    };
+}
+
+fn void expectKeyed(ref Run run, const ref string name, int32 got, int32 want) {
+    if (got == want) { run.pass(); } else { run.fail(name: name, why: "transparent ${got}, wanted ${want} (-1: refused)"); }
+}
+
+fn DynamicArray<uint8> deflated(const ref DynamicArray<uint8> raw) {
+    ZlibWriter<StringWriter> z = ZlibWriter.make(sink: StringWriter.make(), level: DeflateLevel::Level6);
+    bool wrote = match (z.write(bytes: raw.view())) { case Ok(value: k): true; case Err(error: e): false; };
+    return match (give z.finish()) {
+        case Ok(value: s): { StringWriter sw = give s; := give sw.takeBytes(); }
+        case Err(error: u): DynamicArray.empty();
+    };
+}
+
+// `rows` rows of `rowBytes` bytes after a filter byte of `filter`, every byte `fill`.
+fn DynamicArray<uint8> rowsOf(isize rows, isize rowBytes, uint8 filter, uint8 fill) {
+    DynamicArray<uint8> raw = DynamicArray.empty();
+    for (isize r = 0; r < rows; r = r + 1) {
+        raw.add(item: filter);
+        for (isize i = 0; i < rowBytes; i = i + 1) { raw.add(item: fill); }
+    }
+    return give raw;
+}
+
+fn DynamicArray<uint8> empty() { return DynamicArray.empty(); }
+
+fn DynamicArray<uint8> text(isize n) {
+    DynamicArray<uint8> t = DynamicArray.empty();
+    t.add(item: 107); t.add(item: 0);   // keyword "k", then the text
+    for (isize i = 2; i < n; i = i + 1) { t.add(item: 120); }
+    return give t;
+}
+
+// A whole 4×4 grey file: its signature, IHDR, an optional chunk before the data, the data and IEND.
+fn DynamicArray<uint8> greyFile(const ref string extraKind, const ref DynamicArray<uint8> extra) {
+    DynamicArray<uint8> png = signature();
+    chunk(png: ref png, kind: "IHDR", data: header(w: 4ui32, h: 4ui32, depth: 8, colourType: 0), badCrc: false);
+    if (!extraKind.isEmpty()) { chunk(png: ref png, kind: extraKind, data: extra, badCrc: false); }
+    chunk(png: ref png, kind: "IDAT", data: deflated(raw: rowsOf(rows: 4, rowBytes: 4, filter: 0, fill: 9)), badCrc: false);
+    chunk(png: ref png, kind: "IEND", data: empty(), badCrc: false);
+    return give png;
+}
+
+// Expects `png` refused as `kind`, and at byte `at` unless `at` is -2.
+fn void refusedAs(ref Run run, const ref string name, const ref DynamicArray<uint8> png, const ref DecodeOptions options,
+                  ImageErrorKind kind, int64 at) {
+    Result<Image, ImageError> r = decode(bytes: png.view(), options: options);
+    match (give r) {
+        case Ok(value: img): { run.fail(name: name, why: "decoded"); }
+        case Err(error: e): {
+            string msg = e.message();
+            string want = kind.name();
+            int64 got = e.at();
+            if (e.kind() != kind) { run.fail(name: name, why: "refused as ${msg}, not as ${want}"); }
+            else if (at != -2 && got != at) { run.fail(name: name, why: "refused at byte ${got}, not ${at}"); }
+            else { run.pass(); }
+        }
+    };
+}
+
+fn void strictCases(ref Run run) {
+    DecodeOptions defaults = DecodeOptions.defaults();
+
+    // the plain 4×4 grey file decodes, and is opaque
+    {
+        DynamicArray<uint8> png = greyFile(extraKind: "", extra: empty());
+        Result<Image, ImageError> r = decode(bytes: png.view(), options: defaults);
+        match (give r) {
+            case Ok(value: img): {
+                if (img.width() == 4 && img.height() == 4 && img.format() == PixelFormat::Rgba8Unorm && img.alpha() == AlphaMode::Opaque) { run.pass(); }
+                else { run.fail(name: "a hand-built 4x4 grey file", why: "decoded to the wrong shape"); }
+            }
+            case Err(error: e): { string m = e.message(); run.fail(name: "a hand-built 4x4 grey file", why: "refused: ${m}"); }
+        };
+    }
+
+    // the limits, each one at a time
+    {
+        DecodeOptions small = DecodeOptions.defaults();
+        small.limits.maxBytes = 60;   // the samples alone are 64
+        refusedAs(run: ref run, name: "a file past maxBytes", png: greyFile(extraKind: "", extra: empty()), options: small,
+                  kind: ImageErrorKind::Limit, at: 8);
+    }
+    {
+        DecodeOptions small = DecodeOptions.defaults();
+        small.limits.maxChunkBytes = 13;   // IHDR is 13, and this limit holds every chunk but IDAT
+        refusedAs(run: ref run, name: "a chunk past maxChunkBytes", png: greyFile(extraKind: "tEXt", extra: text(n: 14)),
+                  options: small, kind: ImageErrorKind::Limit, at: 33);
+    }
+    {
+        DecodeOptions small = DecodeOptions.defaults();
+        small.limits.maxAncillaryChunks = 2;
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "IHDR", data: header(w: 4ui32, h: 4ui32, depth: 8, colourType: 0), badCrc: false);
+        for (int32 i = 0; i < 3; i = i + 1) { chunk(png: ref png, kind: "tEXt", data: text(n: 4), badCrc: false); }
+        chunk(png: ref png, kind: "IDAT", data: deflated(raw: rowsOf(rows: 4, rowBytes: 4, filter: 0, fill: 9)), badCrc: false);
+        chunk(png: ref png, kind: "IEND", data: empty(), badCrc: false);
+        refusedAs(run: ref run, name: "more ancillary chunks than maxAncillaryChunks", png: png, options: small,
+                  kind: ImageErrorKind::Limit, at: 33 + 16 + 16);
+    }
+
+    {
+        // 2^31-1 a side: the samples' size would overflow int64 if multiplied first
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "IHDR", data: header(w: 0x7fffffffui32, h: 0x7fffffffui32, depth: 16, colourType: 6), badCrc: false);
+        refusedAs(run: ref run, name: "the largest dimensions PNG allows", png: png, options: defaults, kind: ImageErrorKind::Limit, at: 8);
+    }
+
+    // the chunks' own rules
+    refusedAs(run: ref run, name: "an unknown critical chunk", png: greyFile(extraKind: "ABCD", extra: text(n: 3)), options: defaults,
+              kind: ImageErrorKind::Unsupported, at: 33);
+    {
+        DynamicArray<uint8> plte = DynamicArray.empty();
+        for (isize i = 0; i < 6; i = i + 1) { plte.add(item: 1); }
+        refusedAs(run: ref run, name: "a palette in a grey image (libpng drops it)", png: greyFile(extraKind: "PLTE", extra: plte),
+                  options: defaults, kind: ImageErrorKind::ChunkOrder, at: 33);
+    }
+    {
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "tEXt", data: text(n: 4), badCrc: false);
+        chunk(png: ref png, kind: "IHDR", data: header(w: 4ui32, h: 4ui32, depth: 8, colourType: 0), badCrc: false);
+        refusedAs(run: ref run, name: "a chunk before IHDR", png: png, options: defaults, kind: ImageErrorKind::ChunkOrder, at: 8);
+    }
+    {
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "IH1R", data: header(w: 4ui32, h: 4ui32, depth: 8, colourType: 0), badCrc: false);
+        refusedAs(run: ref run, name: "a chunk type that is not four letters", png: png, options: defaults, kind: ImageErrorKind::ChunkType, at: 12);
+    }
+    {
+        DynamicArray<uint8> data = deflated(raw: rowsOf(rows: 4, rowBytes: 4, filter: 0, fill: 9));
+        DynamicArray<uint8> first = DynamicArray.empty();
+        DynamicArray<uint8> second = DynamicArray.empty();
+        for (isize i = 0; i < data.length(); i = i + 1) { if (i < 4) { first.add(item: data[i]); } else { second.add(item: data[i]); } }
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "IHDR", data: header(w: 4ui32, h: 4ui32, depth: 8, colourType: 0), badCrc: false);
+        chunk(png: ref png, kind: "IDAT", data: first, badCrc: false);
+        chunk(png: ref png, kind: "tEXt", data: text(n: 4), badCrc: false);
+        chunk(png: ref png, kind: "IDAT", data: second, badCrc: false);
+        chunk(png: ref png, kind: "IEND", data: empty(), badCrc: false);
+        refusedAs(run: ref run, name: "image data split by another chunk", png: png, options: defaults, kind: ImageErrorKind::ChunkOrder, at: 33 + 16 + 16);
+    }
+    {
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "IHDR", data: header(w: 4ui32, h: 4ui32, depth: 8, colourType: 0), badCrc: false);
+        chunk(png: ref png, kind: "IDAT", data: deflated(raw: rowsOf(rows: 4, rowBytes: 4, filter: 0, fill: 9)), badCrc: false);
+        refusedAs(run: ref run, name: "a file that ends without IEND", png: png, options: defaults, kind: ImageErrorKind::Truncated, at: -2);
+    }
+    {
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "IHDR", data: header(w: 4ui32, h: 4ui32, depth: 8, colourType: 0), badCrc: false);
+        chunk(png: ref png, kind: "IDAT", data: deflated(raw: rowsOf(rows: 4, rowBytes: 4, filter: 0, fill: 9)), badCrc: true);
+        isize crcAt = png.length() - 4;
+        chunk(png: ref png, kind: "IEND", data: empty(), badCrc: false);
+        refusedAs(run: ref run, name: "image data with a bad CRC, at its CRC's byte", png: png, options: defaults,
+                  kind: ImageErrorKind::ChunkCrc, at: cast<int64>(crcAt));
+        Result<Image, ImageError> r = decode(bytes: png.view(), options: defaults);
+        string want = "chunk CRC in IDAT at byte ${crcAt}";
+        match (give r) {
+            case Ok(value: img): { run.fail(name: "an error's message", why: "decoded"); }
+            case Err(error: e): {
+                string got = e.message();
+                if (got == want) { run.pass(); } else { run.fail(name: "an error's message", why: "\"${got}\", not \"${want}\""); }
+            }
+        };
+    }
+    {
+        // the file ends two bytes into the image data's CRC
+        DynamicArray<uint8> whole = signature();
+        chunk(png: ref whole, kind: "IHDR", data: header(w: 4ui32, h: 4ui32, depth: 8, colourType: 0), badCrc: false);
+        chunk(png: ref whole, kind: "IDAT", data: deflated(raw: rowsOf(rows: 4, rowBytes: 4, filter: 0, fill: 9)), badCrc: false);
+        DynamicArray<uint8> cut = DynamicArray.empty();
+        cut.addAll(items: whole.slice(from: 0, count: whole.length() - 2));
+        refusedAs(run: ref run, name: "a file cut inside a CRC", png: cut, options: defaults, kind: ImageErrorKind::Truncated, at: cast<int64>(cut.length()));
+    }
+    {
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "IHDR", data: header(w: 0ui32, h: 4ui32, depth: 8, colourType: 0), badCrc: false);
+        refusedAs(run: ref run, name: "a width of 0", png: png, options: defaults, kind: ImageErrorKind::Header, at: 8);
+    }
+
+    // IHDR's other bytes, and a depth its colour type does not take
+    {
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "IHDR", data: headerWith(w: 4ui32, h: 4ui32, depth: 8, colourType: 0, compression: 1, filter: 0, interlace: 0), badCrc: false);
+        refusedAs(run: ref run, name: "a compression method of 1", png: png, options: defaults, kind: ImageErrorKind::Header, at: 8);
+    }
+    {
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "IHDR", data: headerWith(w: 4ui32, h: 4ui32, depth: 8, colourType: 0, compression: 0, filter: 1, interlace: 0), badCrc: false);
+        refusedAs(run: ref run, name: "a filter method of 1", png: png, options: defaults, kind: ImageErrorKind::Header, at: 8);
+    }
+    {
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "IHDR", data: headerWith(w: 4ui32, h: 4ui32, depth: 8, colourType: 0, compression: 0, filter: 0, interlace: 2), badCrc: false);
+        refusedAs(run: ref run, name: "an interlace method of 2", png: png, options: defaults, kind: ImageErrorKind::Header, at: 8);
+    }
+    {
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "IHDR", data: header(w: 4ui32, h: 4ui32, depth: 16, colourType: 3), badCrc: false);
+        refusedAs(run: ref run, name: "a palette at 16 bits", png: png, options: defaults, kind: ImageErrorKind::Header, at: 8);
+    }
+
+    // tRNS: kept once, before the data, with a good CRC; otherwise dropped, as libpng drops it
+    expectKeyed(run: ref run, name: "a grey key", got: keyed(before: true, badFirst: false, twice: false, after: false), want: 1);
+    expectKeyed(run: ref run, name: "a grey key with a bad CRC, dropped", got: keyed(before: true, badFirst: true, twice: false, after: false), want: 0);
+    expectKeyed(run: ref run, name: "a second key, dropped", got: keyed(before: true, badFirst: false, twice: true, after: false), want: 1);
+    expectKeyed(run: ref run, name: "a key after the image data, dropped", got: keyed(before: false, badFirst: false, twice: false, after: true), want: 0);
+
+    // image data that is malformed, or the wrong length for the image
+    {
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "IHDR", data: header(w: 4ui32, h: 4ui32, depth: 8, colourType: 0), badCrc: false);
+        chunk(png: ref png, kind: "IDAT", data: deflated(raw: rowsOf(rows: 4, rowBytes: 4, filter: 5, fill: 9)), badCrc: false);
+        chunk(png: ref png, kind: "IEND", data: empty(), badCrc: false);
+        refusedAs(run: ref run, name: "a row with no filter 5", png: png, options: defaults, kind: ImageErrorKind::Data, at: -2);
+    }
+    {
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "IHDR", data: header(w: 4ui32, h: 4ui32, depth: 8, colourType: 0), badCrc: false);
+        chunk(png: ref png, kind: "IDAT", data: deflated(raw: rowsOf(rows: 5, rowBytes: 4, filter: 0, fill: 9)), badCrc: false);
+        chunk(png: ref png, kind: "IEND", data: empty(), badCrc: false);
+        refusedAs(run: ref run, name: "a row more image data than the image", png: png, options: defaults, kind: ImageErrorKind::Data, at: -2);
+    }
+    {
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "IHDR", data: header(w: 4ui32, h: 4ui32, depth: 8, colourType: 0), badCrc: false);
+        chunk(png: ref png, kind: "IDAT", data: deflated(raw: rowsOf(rows: 3, rowBytes: 4, filter: 0, fill: 9)), badCrc: false);
+        chunk(png: ref png, kind: "IEND", data: empty(), badCrc: false);
+        refusedAs(run: ref run, name: "a row less image data than the image", png: png, options: defaults, kind: ImageErrorKind::Data, at: -2);
+    }
+    {
+        // a 2-entry palette, and a pixel naming entry 3
+        DynamicArray<uint8> plte = DynamicArray.empty();
+        for (isize i = 0; i < 6; i = i + 1) { plte.add(item: 200); }
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "IHDR", data: header(w: 4ui32, h: 4ui32, depth: 8, colourType: 3), badCrc: false);
+        chunk(png: ref png, kind: "PLTE", data: plte, badCrc: false);
+        chunk(png: ref png, kind: "IDAT", data: deflated(raw: rowsOf(rows: 4, rowBytes: 4, filter: 0, fill: 3)), badCrc: false);
+        chunk(png: ref png, kind: "IEND", data: empty(), badCrc: false);
+        refusedAs(run: ref run, name: "a pixel past the palette's end", png: png, options: defaults, kind: ImageErrorKind::Palette, at: -2);
+    }
+
+    // an image built from samples that do not fit it
+    {
+        FixedArray<uint8> s = FixedArray.make(size: 15);
+        Result<Image, ImageError> r = Image.fromSamples8(width: 2, height: 2, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque,
+                                                         colorSpace: ColorSpace.unspecified(), samples: give s);
+        if (r.isErr()) { run.pass(); } else { run.fail(name: "15 samples for a 2x2 RGBA image", why: "built"); }
+        FixedArray<uint8> t = FixedArray.make(size: 16);
+        Result<Image, ImageError> q = Image.fromSamples8(width: 2, height: 2, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Opaque,
+                                                         colorSpace: ColorSpace.unspecified(), samples: give t);
+        if (q.isErr()) { run.pass(); } else { run.fail(name: "8-bit samples for a 16-bit format", why: "built"); }
+        FixedArray<uint8> u = FixedArray.make(size: 17);
+        Result<Image, ImageError> v = Image.fromSamples8(width: 2, height: 2, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque,
+                                                         colorSpace: ColorSpace.unspecified(), samples: give u);
+        if (v.isErr()) { run.pass(); } else { run.fail(name: "17 samples for a 2x2 RGBA image", why: "built"); }
+    }
+}

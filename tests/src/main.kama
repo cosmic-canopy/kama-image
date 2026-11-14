@@ -1,0 +1,121 @@
+// @kama/image's tests, one program (AGENTS.package.md), the same on every leg: native debug and release, and wasm
+// under node, where the fixtures are embedded at /fixtures.
+//
+// Every fixture is decoded and held to libpng's answer (expected.kama): PngSuite's 176 files and the crafted cases,
+// each either the same size, format, alpha and samples (their CRC-32) or refused with the same kind of error. Run from
+// tests/, so the fixtures are at fixtures/ on every leg. A failing case prints its name and why, and the exit status is
+// 1 when any failed.
+
+import {
+    core::println,
+    std::fs::readFile, std::io::IoError,
+    std::collections::DynamicArray,
+    std::digest::crc32::crc32,
+    image::Image, image::ImageError, image::ImageErrorKind, image::PixelFormat, image::AlphaMode, image::ColorSpace,
+    image::DecodeOptions,
+    image::png::decode,
+    Table, fillExpected, strictCases,
+};
+
+export { Run };
+
+type resource Run {
+    int32 cases;
+    int32 failed;
+
+    public ctor make() { this.cases = 0; this.failed = 0; }
+    public fn void pass() { this.cases = this.cases + 1; }
+    public fn void fail(const ref string name, const ref string why) {
+        this.cases = this.cases + 1;
+        this.failed = this.failed + 1;
+        println(s: "FAIL ${name}: ${why}");
+    }
+    public const fn int32 failures() { return this.failed; }
+    public const fn int32 count() { return this.cases; }
+}
+
+fn string formatName(PixelFormat f) {
+    return match (f) {
+        case R8Unorm: "R8Unorm"; case Rg8Unorm: "Rg8Unorm"; case Rgba8Unorm: "Rgba8Unorm";
+        case R16Unorm: "R16Unorm"; case Rg16Unorm: "Rg16Unorm"; case Rgba16Unorm: "Rgba16Unorm";
+        case Rgba16Float: "Rgba16Float"; case Rgba32Float: "Rgba32Float"; case _: "a later format";
+    };
+}
+
+fn string alphaName(AlphaMode a) {
+    return match (a) { case Opaque: "Opaque"; case Straight: "Straight"; case Premultiplied: "Premultiplied"; };
+}
+
+// One decoded fixture against its row: "" when it matches, else what differs.
+fn string compare(const ref Image img, const ref Table t, isize i) {
+    isize w = img.width();
+    isize h = img.height();
+    isize ww = t.widthAt(at: i);
+    isize wh = t.heightAt(at: i);
+    if (w != ww || h != wh) { return "size ${w}x${h}, libpng ${ww}x${wh}"; }
+    if (img.format() != t.formatAt(at: i)) {
+        string got = formatName(f: img.format());
+        string want = formatName(f: t.formatAt(at: i));
+        return "format ${got}, libpng ${want}";
+    }
+    if (img.alpha() != t.alphaAt(at: i)) {
+        string got = alphaName(a: img.alpha());
+        string want = alphaName(a: t.alphaAt(at: i));
+        return "alpha ${got}, libpng ${want}";
+    }
+    uint32 sum = 0;
+    borrow img.bytes() as b { sum = crc32(bytes: b); }
+    uint32 want = t.crcAt(at: i);
+    if (sum != want) { return "samples' CRC-32 ${sum}, libpng ${want}"; }
+    return "";
+}
+
+// Every fixture, decoded and held to libpng's answer.
+fn void fixtures(ref Run run) {
+    Table t = Table.make();
+    fillExpected(t: ref t);
+    DecodeOptions options = DecodeOptions.defaults();
+    for (isize i = 0; i < t.count(); i = i + 1) {
+        string name = t.nameAt(at: i);
+        string dir = name.startsWith(prefix: "h") ? "crafted" : "pngsuite";
+        string path = "fixtures/${dir}/${name}";
+        Result<DynamicArray<uint8>, IoError> read = readFile(path: path);
+        if (read.isErr()) { run.fail(name: name, why: "cannot read ${path}"); continue; }
+        DynamicArray<uint8> file = match (give read) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+        Result<Image, ImageError> r = decode(bytes: file.view(), options: options);
+        if (t.decodesAt(at: i)) {
+            match (give r) {
+                case Ok(value: img): {
+                    string why = compare(img: img, t: t, i: i);
+                    if (why.isEmpty()) { run.pass(); } else { run.fail(name: name, why: why); }
+                }
+                case Err(error: e): {
+                    string msg = e.message();
+                    run.fail(name: name, why: "refused (${msg}), where libpng decodes it");
+                }
+            };
+        } else {
+            match (give r) {
+                case Ok(value: img): { run.fail(name: name, why: "decoded, where libpng refuses it"); }
+                case Err(error: e): {
+                    if (e.kind() == t.kindAt(at: i)) { run.pass(); }
+                    else {
+                        string got = e.message();
+                        string want = t.kindAt(at: i).name();
+                        run.fail(name: name, why: "refused as ${got}, where libpng's words are a ${want} error");
+                    }
+                }
+            };
+        }
+    }
+}
+
+fn uint8 main() {
+    Run run = Run.make();
+    fixtures(run: ref run);
+    strictCases(run: ref run);
+    int32 n = run.count();
+    int32 f = run.failures();
+    println(s: "image tests: ${n} cases, ${f} failed");
+    return f == 0 ? 0 : 1;
+}

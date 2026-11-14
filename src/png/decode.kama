@@ -1,0 +1,399 @@
+// image::png's decoder (IMG-1; AGENTS.image.md § Decided, 1 and 2).
+//
+//   Result<Image, ImageError> r = decode(bytes: file.view(), options: DecodeOptions.defaults());
+//
+// Every colour type and bit depth, palettes and `tRNS`, and Adam7 interlacing, expanded to four channels at the file's
+// own depth: `Rgba8Unorm` up to 8 bits, `Rgba16Unorm` at 16. Strict, as the PNG Third Edition's § 13 asks: a broken
+// critical chunk, image data that does not decode to exactly the image, a bad Adler-32 and a truncated file are each
+// refused, with the byte and the chunk; an ancillary chunk that is broken or out of place is dropped, as libpng drops
+// it. Every size is checked against `DecodeLimits` before it is multiplied, and every number from the file reaches an
+// index only through `try cast`, so no file ends the program.
+
+import {
+    std::collections::DynamicArray, std::collections::FixedArray, std::collections::ConstView, std::collections::View,
+    std::compress::zlib::ZlibReader, std::io::BufReader, std::io::SliceReader, std::io::IoError, std::io::IoErrorKind,
+    std::digest::crc32::crc32,
+    image::Image, image::ImageError, image::ImageErrorKind, image::PixelFormat, image::AlphaMode, image::ColorSpace,
+    image::DecodeOptions,
+};
+
+export { decode };
+
+comptime uint32 IHDR = 0x49484452ui32;
+comptime uint32 PLTE = 0x504C5445ui32;
+comptime uint32 IDAT = 0x49444154ui32;
+comptime uint32 IEND = 0x49454E44ui32;
+comptime uint32 TRNS = 0x74524E53ui32;
+
+fn Result<Image, ImageError> refuse(ImageErrorKind kind, int64 at, uint32 chunk) {
+    return Result::Err(error: ImageError.make(kind: kind, at: at, chunk: chunk));
+}
+
+fn uint32 be32(ConstView<uint8> b, isize at) {
+    return (cast<uint32>(b[at]) << 24) | (cast<uint32>(b[at + 1]) << 16) | (cast<uint32>(b[at + 2]) << 8) | cast<uint32>(b[at + 3]);
+}
+
+fn bool isLetter(uint8 c) { return (c >= 65 && c <= 90) || (c >= 97 && c <= 122); }
+
+// IHDR, read and checked.
+type value Header {
+    public int64 width = 0;
+    public int64 height = 0;
+    public int64 depth = 0;
+    public int64 colourType = 0;
+    public bool interlaced = false;
+
+    public ctor none() { }
+
+    public const fn int64 channels() {
+        if (this.colourType == 2) { return 3; }
+        if (this.colourType == 4) { return 2; }
+        if (this.colourType == 6) { return 4; }
+        return 1;
+    }
+    // The bytes one row of `w` pixels takes, before its filter byte.
+    public const fn int64 rowBytes(int64 w) { return (w * this.channels() * this.depth + 7) / 8; }
+    // The bytes a filter looks back by: one whole pixel, at least one byte.
+    public const fn int64 filterStep() {
+        int64 b = this.channels() * this.depth / 8;
+        return b < 1 ? 1 : b;
+    }
+}
+
+fn bool depthAllowed(int64 colourType, int64 depth) {
+    if (colourType == 0) { return depth == 1 || depth == 2 || depth == 4 || depth == 8 || depth == 16; }
+    if (colourType == 3) { return depth == 1 || depth == 2 || depth == 4 || depth == 8; }
+    if (colourType == 2 || colourType == 4 || colourType == 6) { return depth == 8 || depth == 16; }
+    return false;
+}
+
+// Adam7: each pass's first column and row, and its steps across and down. Pass 7 of 7 is the plain image's (0, 0, 1, 1).
+fn int64 passX(int64 p) { InlineArray<int64>#(8) v = [0, 4, 0, 2, 0, 1, 0, 0]; return v[cast<isize>(p)]; }
+fn int64 passY(int64 p) { InlineArray<int64>#(8) v = [0, 0, 4, 0, 2, 0, 1, 0]; return v[cast<isize>(p)]; }
+fn int64 passDx(int64 p) { InlineArray<int64>#(8) v = [8, 8, 4, 4, 2, 2, 1, 1]; return v[cast<isize>(p)]; }
+fn int64 passDy(int64 p) { InlineArray<int64>#(8) v = [8, 8, 8, 4, 4, 2, 2, 1]; return v[cast<isize>(p)]; }
+fn int64 passCount(int64 full, int64 start, int64 step) { return full > start ? (full - start + step - 1) / step : 0; }
+
+// Takes `amount` from what a decode may still allocate; false when there is not that much left.
+fn bool take(ref int64 left, int64 amount) {
+    if (amount < 0 || amount > left) { return false; }
+    left = left - amount;
+    return true;
+}
+
+// The bytes of every row of every pass, filter bytes included: what the image data must inflate to exactly. -1 when it
+// would pass `left`, which it then takes from.
+fn int64 filteredBytes(const ref Header h, ref int64 left) {
+    int64 total = 0;
+    int64 first = h.interlaced ? 0 : 7;
+    for (int64 p = first; p < 8 - (h.interlaced ? 1 : 0); p = p + 1) {
+        int64 pw = passCount(full: h.width, start: passX(p: p), step: passDx(p: p));
+        int64 ph = passCount(full: h.height, start: passY(p: p), step: passDy(p: p));
+        if (pw == 0 || ph == 0) { continue; }
+        int64 row = h.rowBytes(w: pw) + 1;
+        if (row > left / ph) { return -1; }
+        int64 bytes = row * ph;
+        if (!take(left: ref left, amount: bytes)) { return -1; }
+        total = total + bytes;
+    }
+    return total;
+}
+
+fn int32 paeth(int32 a, int32 b, int32 c) {
+    int32 p = a + b - c;
+    int32 pa = p > a ? p - a : a - p;
+    int32 pb = p > b ? p - b : b - p;
+    int32 pc = p > c ? p - c : c - p;
+    if (pa <= pb && pa <= pc) { return a; }
+    if (pb <= pc) { return b; }
+    return c;
+}
+
+// Undoes one row's filter in place: its `n` bytes start at `at`, the row above's at `prev` (-1 for none).
+fn void unfilter(ref FixedArray<uint8> raw, isize at, isize n, isize step, isize prev, uint8 kind) {
+    if (kind == 1) {
+        for (isize i = step; i < n; i = i + 1) { raw[at + i] = truncate<uint8>(cast<int32>(raw[at + i]) + cast<int32>(raw[at + i - step])); }
+    } else if (kind == 2) {
+        if (prev < 0) { return; }
+        for (isize i = 0; i < n; i = i + 1) { raw[at + i] = truncate<uint8>(cast<int32>(raw[at + i]) + cast<int32>(raw[prev + i])); }
+    } else if (kind == 3) {
+        for (isize i = 0; i < n; i = i + 1) {
+            int32 a = i >= step ? cast<int32>(raw[at + i - step]) : 0;
+            int32 b = prev >= 0 ? cast<int32>(raw[prev + i]) : 0;
+            raw[at + i] = truncate<uint8>(cast<int32>(raw[at + i]) + ((a + b) >> 1));
+        }
+    } else if (kind == 4) {
+        for (isize i = 0; i < n; i = i + 1) {
+            int32 a = i >= step ? cast<int32>(raw[at + i - step]) : 0;
+            int32 b = prev >= 0 ? cast<int32>(raw[prev + i]) : 0;
+            int32 c = i >= step && prev >= 0 ? cast<int32>(raw[prev + i - step]) : 0;
+            raw[at + i] = truncate<uint8>(cast<int32>(raw[at + i]) + paeth(a: a, b: b, c: c));
+        }
+    }
+}
+
+// One sample of a row whose bytes start at `at`: sample `i` of the row, at the header's depth.
+fn int32 sampleAt(const ref FixedArray<uint8> raw, isize at, isize i, int64 depth) {
+    if (depth == 16) { return (cast<int32>(raw[at + i * 2]) << 8) | cast<int32>(raw[at + i * 2 + 1]); }
+    if (depth == 8) { return cast<int32>(raw[at + i]); }
+    isize d = cast<isize>(depth);
+    isize bit = i * d;
+    int32 b = cast<int32>(raw[at + bit / 8]);
+    int32 shift = cast<int32>(8 - d - bit % 8);
+    return (b >> shift) & ((1 << cast<int32>(d)) - 1);
+}
+
+// A grey sample below 8 bits, scaled to 8 as libpng's expand does (1 bit × 255, 2 × 85, 4 × 17).
+fn int32 scaleGrey(int32 v, int64 depth) {
+    if (depth == 1) { return v * 255; }
+    if (depth == 2) { return v * 85; }
+    if (depth == 4) { return v * 17; }
+    return v;
+}
+
+// What a decode found in the chunks besides the image data.
+type value Chunks {
+    public bool hasPalette = false;
+    public isize paletteEntries = 0;
+    public bool hasKey = false;      // a tRNS colour key, for grey or RGB
+    public int32 keyR = 0;
+    public int32 keyG = 0;
+    public int32 keyB = 0;
+    public isize alphaEntries = 0;   // a tRNS for a palette: the entries it gives an alpha
+    public int64 firstData = -1;     // the first IDAT's byte
+
+    public ctor none() { }
+}
+
+// Reconstructs the image from its inflated rows into `out8` or `out16`: -1 when it decodes, else the byte of `raw` it
+// stopped at, with `badFilter` saying whether a row named no filter or a pixel named a palette entry past its end.
+fn int64 reconstruct(ref FixedArray<uint8> raw, const ref Header h, const ref Chunks c, const ref FixedArray<uint8> palette,
+                     const ref FixedArray<uint8> alphas, ref FixedArray<uint8> out8, ref FixedArray<uint16> out16, ref bool badFilter) {
+    isize off = 0;
+    isize w = cast<isize>(h.width);
+    isize step = cast<isize>(h.filterStep());
+    int32 max = h.depth == 16 ? 65535 : 255;
+    int32 keyMask = h.depth == 16 ? 65535 : (1 << cast<int32>(h.depth)) - 1;
+    int64 first = h.interlaced ? 0 : 7;
+    for (int64 p = first; p < 8 - (h.interlaced ? 1 : 0); p = p + 1) {
+        isize pw = cast<isize>(passCount(full: h.width, start: passX(p: p), step: passDx(p: p)));
+        isize ph = cast<isize>(passCount(full: h.height, start: passY(p: p), step: passDy(p: p)));
+        if (pw == 0 || ph == 0) { continue; }
+        isize rb = cast<isize>(h.rowBytes(w: cast<int64>(pw)));
+        isize xs = cast<isize>(passX(p: p));
+        isize ys = cast<isize>(passY(p: p));
+        isize dx = cast<isize>(passDx(p: p));
+        isize dy = cast<isize>(passDy(p: p));
+        for (isize r = 0; r < ph; r = r + 1) {
+            uint8 kind = raw[off];
+            if (kind > 4) { badFilter = true; return cast<int64>(off); }
+            isize at = off + 1;
+            unfilter(raw: ref raw, at: at, n: rb, step: step, prev: r > 0 ? at - rb - 1 : -1, kind: kind);
+            isize y = ys + r * dy;
+            for (isize x = 0; x < pw; x = x + 1) {
+                isize dst = ((y * w) + xs + x * dx) * 4;
+                int32 rr = 0;
+                int32 gg = 0;
+                int32 bb = 0;
+                int32 aa = max;
+                if (h.colourType == 0) {
+                    int32 v = sampleAt(raw: raw, at: at, i: x, depth: h.depth);
+                    if (c.hasKey && v == (c.keyG & keyMask)) { aa = 0; }
+                    rr = scaleGrey(v: v, depth: h.depth);
+                    gg = rr;
+                    bb = rr;
+                } else if (h.colourType == 2) {
+                    rr = sampleAt(raw: raw, at: at, i: x * 3, depth: h.depth);
+                    gg = sampleAt(raw: raw, at: at, i: x * 3 + 1, depth: h.depth);
+                    bb = sampleAt(raw: raw, at: at, i: x * 3 + 2, depth: h.depth);
+                    if (c.hasKey && rr == (c.keyR & keyMask) && gg == (c.keyG & keyMask) && bb == (c.keyB & keyMask)) { aa = 0; }
+                } else if (h.colourType == 3) {
+                    isize e = cast<isize>(sampleAt(raw: raw, at: at, i: x, depth: h.depth));
+                    if (e >= c.paletteEntries) { return cast<int64>(at); }
+                    rr = cast<int32>(palette[e * 3]);
+                    gg = cast<int32>(palette[e * 3 + 1]);
+                    bb = cast<int32>(palette[e * 3 + 2]);
+                    if (e < c.alphaEntries) { aa = cast<int32>(alphas[e]); }
+                } else if (h.colourType == 4) {
+                    rr = sampleAt(raw: raw, at: at, i: x * 2, depth: h.depth);
+                    gg = rr;
+                    bb = rr;
+                    aa = sampleAt(raw: raw, at: at, i: x * 2 + 1, depth: h.depth);
+                } else {
+                    rr = sampleAt(raw: raw, at: at, i: x * 4, depth: h.depth);
+                    gg = sampleAt(raw: raw, at: at, i: x * 4 + 1, depth: h.depth);
+                    bb = sampleAt(raw: raw, at: at, i: x * 4 + 2, depth: h.depth);
+                    aa = sampleAt(raw: raw, at: at, i: x * 4 + 3, depth: h.depth);
+                }
+                if (h.depth == 16) {
+                    out16[dst] = truncate<uint16>(rr);
+                    out16[dst + 1] = truncate<uint16>(gg);
+                    out16[dst + 2] = truncate<uint16>(bb);
+                    out16[dst + 3] = truncate<uint16>(aa);
+                } else {
+                    out8[dst] = truncate<uint8>(rr);
+                    out8[dst + 1] = truncate<uint8>(gg);
+                    out8[dst + 2] = truncate<uint8>(bb);
+                    out8[dst + 3] = truncate<uint8>(aa);
+                }
+            }
+            off = off + rb + 1;
+        }
+    }
+    return -1;
+}
+
+fn Result<Image, ImageError> decode(ConstView<uint8> bytes, const ref DecodeOptions options) {
+    isize n = bytes.length();
+    InlineArray<uint8>#(8) sig = [137, 80, 78, 71, 13, 10, 26, 10];
+    for (isize i = 0; i < 8; i = i + 1) {
+        if (i >= n) { return refuse(kind: ImageErrorKind::Truncated, at: cast<int64>(n), chunk: 0); }
+        if (bytes[i] != sig[i]) { return refuse(kind: ImageErrorKind::Signature, at: cast<int64>(i), chunk: 0); }
+    }
+
+    int64 left = options.limits.maxBytes;
+    Header h = Header.none();
+    Chunks c = Chunks.none();
+    bool seenHeader = false;
+    bool dataStarted = false;
+    bool dataEnded = false;
+    bool seenTrns = false;
+    int64 ancillary = 0;
+    FixedArray<uint8> palette = FixedArray.make(size: 768);
+    FixedArray<uint8> alphas = FixedArray.make(size: 256);
+    DynamicArray<uint8> data = DynamicArray.empty();
+    isize at = 8;
+    while (true) {
+        if (n - at < 12) { return refuse(kind: ImageErrorKind::Truncated, at: cast<int64>(n), chunk: 0); }
+        uint32 len32 = be32(b: bytes, at: at);
+        uint32 kind = be32(b: bytes, at: at + 4);
+        int64 start = cast<int64>(at);
+        for (isize i = 4; i < 8; i = i + 1) {
+            if (!isLetter(c: bytes[at + i])) { return refuse(kind: ImageErrorKind::ChunkType, at: start + 4, chunk: 0); }
+        }
+        if (cast<int64>(len32) > cast<int64>(n - at) - 12) { return refuse(kind: ImageErrorKind::Truncated, at: cast<int64>(n), chunk: kind); }
+        isize len = cast<isize>(len32);
+        bool critical = (bytes[at + 4] & 0x20) == 0;
+        bool crcGood = crc32(bytes: bytes.slice(from: at + 4, count: len + 4)) == be32(b: bytes, at: at + 8 + len);
+        isize d = at + 8;
+        if (!seenHeader && kind != IHDR) { return refuse(kind: ImageErrorKind::ChunkOrder, at: start, chunk: kind); }
+        if (kind != IDAT && dataStarted) { dataEnded = true; }
+        if (critical && !crcGood) { return refuse(kind: ImageErrorKind::ChunkCrc, at: cast<int64>(at + 8 + len), chunk: kind); }
+        if (kind != IDAT && cast<int64>(len) > options.limits.maxChunkBytes) { return refuse(kind: ImageErrorKind::Limit, at: start, chunk: kind); }
+
+        if (kind == IHDR) {
+            if (seenHeader) { return refuse(kind: ImageErrorKind::ChunkOrder, at: start, chunk: kind); }
+            if (len != 13) { return refuse(kind: ImageErrorKind::Header, at: start, chunk: kind); }
+            seenHeader = true;
+            h.width = cast<int64>(be32(b: bytes, at: d));
+            h.height = cast<int64>(be32(b: bytes, at: d + 4));
+            h.depth = cast<int64>(bytes[d + 8]);
+            h.colourType = cast<int64>(bytes[d + 9]);
+            if (h.width < 1 || h.width > 0x7fffffff || h.height < 1 || h.height > 0x7fffffff
+                || !depthAllowed(colourType: h.colourType, depth: h.depth)) {
+                return refuse(kind: ImageErrorKind::Header, at: start, chunk: kind);
+            }
+            if (bytes[d + 10] != 0 || bytes[d + 11] != 0 || bytes[d + 12] > 1) { return refuse(kind: ImageErrorKind::Header, at: start, chunk: kind); }
+            h.interlaced = bytes[d + 12] == 1;
+            // the samples: width × height × 4 channels, at 1 or 2 bytes each
+            int64 sampleBytes = h.depth == 16 ? 8 : 4;
+            if (h.width > left / h.height || h.width * h.height > left / sampleBytes) { return refuse(kind: ImageErrorKind::Limit, at: start, chunk: kind); }
+            if (!take(left: ref left, amount: h.width * h.height * sampleBytes)) { return refuse(kind: ImageErrorKind::Limit, at: start, chunk: kind); }
+        } else if (kind == PLTE) {
+            if (h.colourType == 0 || h.colourType == 4 || c.hasPalette || dataStarted) {
+                return refuse(kind: ImageErrorKind::ChunkOrder, at: start, chunk: kind);
+            }
+            isize entries = len / 3;
+            int64 most = h.colourType == 3 ? (1i64 << h.depth) : 256;
+            if (len % 3 != 0 || entries < 1 || entries > 256 || cast<int64>(entries) > most) {
+                return refuse(kind: ImageErrorKind::Palette, at: start, chunk: kind);
+            }
+            for (isize i = 0; i < len; i = i + 1) { palette[i] = bytes[d + i]; }
+            c.hasPalette = true;
+            c.paletteEntries = h.colourType == 3 ? entries : 0;
+        } else if (kind == IDAT) {
+            if (dataEnded) { return refuse(kind: ImageErrorKind::ChunkOrder, at: start, chunk: kind); }
+            if (h.colourType == 3 && !c.hasPalette) { return refuse(kind: ImageErrorKind::ChunkOrder, at: start, chunk: kind); }
+            if (!take(left: ref left, amount: cast<int64>(len))) { return refuse(kind: ImageErrorKind::Limit, at: start, chunk: kind); }
+            if (!dataStarted) { c.firstData = start; }
+            dataStarted = true;
+            data.addAll(items: bytes.slice(from: d, count: len));
+        } else if (kind == IEND) {
+            if (!dataStarted) { return refuse(kind: ImageErrorKind::ChunkOrder, at: start, chunk: kind); }
+            break;
+        } else if (critical) {
+            return refuse(kind: ImageErrorKind::Unsupported, at: start, chunk: kind);
+        } else {
+            ancillary = ancillary + 1;
+            if (ancillary > options.limits.maxAncillaryChunks) { return refuse(kind: ImageErrorKind::Limit, at: start, chunk: kind); }
+            // An ancillary chunk that is broken, repeated or out of place is dropped, as libpng drops it.
+            if (kind == TRNS && crcGood && !seenTrns && !dataStarted) {
+                seenTrns = true;
+                if (h.colourType == 3 && c.hasPalette && len >= 1 && len <= c.paletteEntries) {
+                    for (isize i = 0; i < len; i = i + 1) { alphas[i] = bytes[d + i]; }
+                    c.alphaEntries = len;
+                } else if (h.colourType == 0 && len == 2) {
+                    c.hasKey = true;
+                    c.keyG = (cast<int32>(bytes[d]) << 8) | cast<int32>(bytes[d + 1]);
+                } else if (h.colourType == 2 && len == 6) {
+                    c.hasKey = true;
+                    c.keyR = (cast<int32>(bytes[d]) << 8) | cast<int32>(bytes[d + 1]);
+                    c.keyG = (cast<int32>(bytes[d + 2]) << 8) | cast<int32>(bytes[d + 3]);
+                    c.keyB = (cast<int32>(bytes[d + 4]) << 8) | cast<int32>(bytes[d + 5]);
+                }
+            }
+        }
+        at = at + 12 + len;
+    }
+
+    // The image data, inflated to exactly the rows the header names.
+    int64 need = filteredBytes(h: h, left: ref left);
+    if (need < 0) { return refuse(kind: ImageErrorKind::Limit, at: c.firstData, chunk: IDAT); }
+    Optional<isize> needSize = try cast<isize>(need);
+    Optional<isize> sampleCount = try cast<isize>(h.width * h.height * 4);
+    if (needSize.isNone() || sampleCount.isNone()) { return refuse(kind: ImageErrorKind::Limit, at: c.firstData, chunk: IDAT); }
+    isize total = match (needSize) { case Some(value: v): v; case None: 0; };
+    isize samples = match (sampleCount) { case Some(value: v): v; case None: 0; };
+    FixedArray<uint8> raw = FixedArray.make(size: total);
+    ZlibReader<SliceReader> z = ZlibReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: give data)), limit: cast<uint64>(total));
+    isize got = 0;
+    bool ended = false;
+    IoErrorKind failure = IoErrorKind::Other;
+    bool failed = false;
+    borrow raw.viewMut() as all {
+        while (got < total && !failed && !ended) {
+            Result<isize, IoError> r = z.read(into: all.slice(from: got, count: total - got));
+            match (r) {
+                case Ok(value: k): { if (k == 0) { ended = true; } else { got = got + k; } }
+                case Err(error: e): { failed = true; failure = e.kind(); }
+            };
+        }
+    }
+    if (failed || ended) { return refuse(kind: ImageErrorKind::Data, at: -1, chunk: IDAT); }
+    // The stream must end where the image does, and its Adler-32 hold.
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    Result<isize, IoError> end = z.read(into: one.viewMut());
+    match (end) {
+        case Ok(value: k): { }
+        case Err(error: e): { failed = true; failure = e.kind(); }
+    };
+    if (failed) {
+        if (failure == IoErrorKind::InvalidData) { return refuse(kind: ImageErrorKind::DataChecksum, at: -1, chunk: IDAT); }
+        return refuse(kind: ImageErrorKind::Data, at: -1, chunk: IDAT);
+    }
+
+    FixedArray<uint8> out8 = FixedArray.make(size: h.depth == 16 ? 0 : samples);
+    FixedArray<uint16> out16 = FixedArray.make(size: h.depth == 16 ? samples : 0);
+    bool badFilter = false;
+    int64 bad = reconstruct(raw: ref raw, h: h, c: c, palette: palette, alphas: alphas, out8: ref out8, out16: ref out16, badFilter: ref badFilter);
+    if (bad >= 0) { return refuse(kind: badFilter ? ImageErrorKind::Data : ImageErrorKind::Palette, at: -1, chunk: IDAT); }
+
+    bool straight = h.colourType == 4 || h.colourType == 6 || c.hasKey || c.alphaEntries > 0;
+    AlphaMode alpha = straight ? AlphaMode::Straight : AlphaMode::Opaque;
+    isize w = cast<isize>(h.width);
+    isize ht = cast<isize>(h.height);
+    if (h.depth == 16) {
+        return Image.fromSamples16(width: w, height: ht, format: PixelFormat::Rgba16Unorm, alpha: alpha, colorSpace: ColorSpace.unspecified(), samples: give out16);
+    }
+    return Image.fromSamples8(width: w, height: ht, format: PixelFormat::Rgba8Unorm, alpha: alpha, colorSpace: ColorSpace.unspecified(), samples: give out8);
+}

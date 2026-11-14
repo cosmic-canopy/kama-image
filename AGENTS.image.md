@@ -22,8 +22,10 @@ image format). Its first users:
 
 ## Where things stand
 
-**Seeded on 2026-11-14 with `kama seed` on kama 0.9.947+gf919c10e (kyoten's pin). Nothing is built.** Whether it is a
-first-party package, as kama ruled `@kama/graphics` one (KR-309), is kama's to rule; the owner relays the question.
+**Seeded on 2026-11-14 with `kama seed` on kama 0.9.947+gf919c10e; built on 0.9.949, kyoten's pin.** IMG-1, PNG
+decoding, is under way: its first part is built ([SPEC.md](SPEC.md)), and its colour chunks, options and gate sweep
+come next ([ROADMAP_DETAIL.md](ROADMAP_DETAIL.md#png-decode)). Whether it is a first-party package, as kama ruled
+`@kama/graphics` one (KR-309), is kama's to rule; the owner relays the question.
 
 **A short design pass comes before any code,** as `@kama/graphics`' and `@kama/audio`'s did. Each question is measured
 first where it can be, then asked of the owner in full: the problem, an example, the options and the production

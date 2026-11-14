@@ -1,0 +1,16 @@
+{
+  "name": "imagetests",
+  "version": "0.1.0",
+  "kind": "executable",
+  "kama": ">=0.9.949",
+  "description": "@kama/image's tests: every fixture decoded and held to libpng's answer, on every leg",
+  "entry": "src/main.kama",
+  "embedFiles": ["fixtures@/fixtures"],
+  "emSettings": { "ALLOW_MEMORY_GROWTH": 1 },
+  "modules": {
+    ".": { "visibility": "internal" }
+  },
+  "dependencies": {
+    "@kama/image": { "path": ".." }
+  }
+}
