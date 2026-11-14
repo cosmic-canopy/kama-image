@@ -28,7 +28,8 @@ first-party package, as kama ruled `@kama/graphics` one (KR-309), is kama's to r
 **A short design pass comes before any code,** as `@kama/graphics`' and `@kama/audio`'s did. Each question is measured
 first where it can be, then asked of the owner in full: the problem, an example, the options and the production
 answer. The answers are recorded here with their reasons, and the rows they create go in a `ROADMAP.md` (ids
-`IMG-<n>`). What is open:
+`IMG-<n>`). **All five were measured on 2026-11-14, on kama 0.9.949, and put to the owner the same day**: the evidence
+is [RESEARCH.md](RESEARCH.md), its probes in `.scratch/img-probe-*/`. What is open:
 
 1. **The web: the browser's decoders and encoders, or kama's own everywhere?** kyoten's rule is to lean on the web
    ("as lean as possible on the web and rely on the best in class browser APIs"): `createImageBitmap` and WebCodecs'
