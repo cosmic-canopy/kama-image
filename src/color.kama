@@ -1,15 +1,18 @@
 // What an image's numbers mean as colour (AGENTS.image.md § Decided, 1): its primaries and its transfer, so a renderer
-// never guesses whether values are sRGB-encoded or linear. A file that says nothing is unspecified, never assumed.
+// never guesses whether values are sRGB-encoded or linear. A file that says nothing is unspecified, never assumed; one
+// whose colour an embedded ICC profile describes says so, and the profile is on the image, never applied by a decode.
 
-export { ColorSpace, Primaries, Transfer };
+export { ColorSpace, Primaries, Transfer, Chromaticities };
 
-// The primaries and white point, by the names ITU-T H.273 gives them (PNG's cICP chunk).
+// The primaries and white point.
 @nonExhaustive
 type enum Primaries {
     Unspecified,
     Bt709,          // sRGB's, and BT.709's
     DisplayP3,
-    Bt2020;
+    Bt2020,
+    Custom,         // given as chromaticities no named set matches: `ColorSpace.chromaticities`
+    IccProfile;     // an embedded ICC profile describes them: `Image.iccProfile()`
 }
 
 // How the stored numbers map to light.
@@ -18,13 +21,38 @@ type enum Transfer {
     Unspecified,
     Srgb,           // sRGB's curve
     Linear,
+    Gamma,          // a power curve, given as PNG's gAMA gives it: `ColorSpace.gamma`
     Pq,             // SMPTE ST 2084, HDR
-    Hlg;            // ARIB STD-B67, HDR
+    Hlg,            // ARIB STD-B67, HDR
+    IccProfile;     // an embedded ICC profile describes it
+}
+
+// A white point and three primaries as CIE x and y, each × 100000, as PNG's cHRM holds them.
+type value Chromaticities {
+    public int32 whiteX = 0;
+    public int32 whiteY = 0;
+    public int32 redX = 0;
+    public int32 redY = 0;
+    public int32 greenX = 0;
+    public int32 greenY = 0;
+    public int32 blueX = 0;
+    public int32 blueY = 0;
+
+    public ctor none() { }
+    public ctor make(int32 whiteX, int32 whiteY, int32 redX, int32 redY, int32 greenX, int32 greenY, int32 blueX, int32 blueY) {
+        this.whiteX = whiteX; this.whiteY = whiteY; this.redX = redX; this.redY = redY;
+        this.greenX = greenX; this.greenY = greenY; this.blueX = blueX; this.blueY = blueY;
+    }
 }
 
 type value ColorSpace {
     public Primaries primaries;
     public Transfer transfer;
+    // The power a gAMA chunk gave, as PNG stores it: the encoding exponent × 100000 (45455 is 1/2.2, 100000 linear).
+    // 0 unless the transfer came from one.
+    public uint32 gamma = 0;
+    // The chromaticities a cHRM chunk gave, when the primaries came from one; all 0 otherwise.
+    public Chromaticities chromaticities = Chromaticities.none();
 
     public ctor make(Primaries primaries, Transfer transfer) {
         this.primaries = primaries;

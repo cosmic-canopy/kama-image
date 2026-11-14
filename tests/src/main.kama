@@ -12,9 +12,10 @@ import {
     std::collections::DynamicArray,
     std::digest::crc32::crc32,
     image::Image, image::ImageError, image::ImageErrorKind, image::PixelFormat, image::AlphaMode, image::ColorSpace,
+    image::Primaries, image::Transfer, image::RenderingIntent, image::Cicp, image::MasteringDisplay, image::ContentLight,
     image::DecodeOptions,
     image::png::decode,
-    Table, fillExpected, strictCases,
+    Table, fillExpected, strictCases, colourCases,
 };
 
 export { Run };
@@ -70,6 +71,104 @@ fn string compare(const ref Image img, const ref Table t, isize i) {
     return "";
 }
 
+fn string primariesName(Primaries p) {
+    return match (p) {
+        case Unspecified: "Unspecified"; case Bt709: "Bt709"; case DisplayP3: "DisplayP3"; case Bt2020: "Bt2020";
+        case Custom: "Custom"; case IccProfile: "IccProfile"; case _: "a later primaries";
+    };
+}
+
+fn string transferName(Transfer t) {
+    return match (t) {
+        case Unspecified: "Unspecified"; case Srgb: "Srgb"; case Linear: "Linear"; case Gamma: "Gamma"; case Pq: "Pq";
+        case Hlg: "Hlg"; case IccProfile: "IccProfile"; case _: "a later transfer";
+    };
+}
+
+fn int32 intentNumber(Optional<RenderingIntent> i) {
+    return match (i) {
+        case None: -1;
+        case Some(value: v): match (v) {
+            case Perceptual: 0; case RelativeColorimetric: 1; case Saturation: 2; case AbsoluteColorimetric: 3;
+        };
+    };
+}
+
+fn void put16(ref DynamicArray<uint8> b, uint16 v) { b.add(item: truncate<uint8>(v >> 8)); b.add(item: truncate<uint8>(v)); }
+fn void put32(ref DynamicArray<uint8> b, uint32 v) {
+    b.add(item: truncate<uint8>(v >> 24)); b.add(item: truncate<uint8>(v >> 16)); b.add(item: truncate<uint8>(v >> 8)); b.add(item: truncate<uint8>(v));
+}
+
+// The mDCV chunk's own 24 bytes, rebuilt from what the image kept, and their CRC-32: 0 when it kept none.
+fn uint32 mdcvCrc(Optional<MasteringDisplay> m) {
+    return match (m) {
+        case None: 0ui32;
+        case Some(value: d): {
+            DynamicArray<uint8> b = DynamicArray.empty();
+            put16(b: ref b, v: d.redX); put16(b: ref b, v: d.redY); put16(b: ref b, v: d.greenX); put16(b: ref b, v: d.greenY);
+            put16(b: ref b, v: d.blueX); put16(b: ref b, v: d.blueY); put16(b: ref b, v: d.whiteX); put16(b: ref b, v: d.whiteY);
+            put32(b: ref b, v: d.maxLuminance); put32(b: ref b, v: d.minLuminance);
+            := crc32(bytes: b.view());
+        }
+    };
+}
+
+// One decoded fixture's colour against its row: "" when it matches, else what differs.
+fn string compareColour(const ref Image img, const ref Table t, isize i) {
+    if (!t.colouredAt(at: i)) { return "no colour row"; }
+    ColorSpace cs = img.colorSpace();
+    if (cs.primaries != t.primariesAt(at: i) || cs.transfer != t.transferAt(at: i)) {
+        string gp = primariesName(p: cs.primaries);
+        string gt = transferName(t: cs.transfer);
+        string wp = primariesName(p: t.primariesAt(at: i));
+        string wt = transferName(t: t.transferAt(at: i));
+        return "colour space ${gp} ${gt}, libpng's chunks give ${wp} ${wt}";
+    }
+    int64 gamma = cast<int64>(cs.gamma);
+    int64 wantGamma = t.gammaAt(at: i);
+    if (gamma != wantGamma) { return "gamma ${gamma}, libpng ${wantGamma}"; }
+    InlineArray<int64>#(8) got = [cast<int64>(cs.chromaticities.whiteX), cast<int64>(cs.chromaticities.whiteY),
+        cast<int64>(cs.chromaticities.redX), cast<int64>(cs.chromaticities.redY), cast<int64>(cs.chromaticities.greenX),
+        cast<int64>(cs.chromaticities.greenY), cast<int64>(cs.chromaticities.blueX), cast<int64>(cs.chromaticities.blueY)];
+    for (isize k = 0; k < 8; k = k + 1) {
+        int64 g = got[k];
+        int64 w = t.chromaticityAt(at: i, k: k);
+        if (g != w) { return "chromaticity ${k}: ${g}, libpng ${w}"; }
+    }
+    int32 intent = intentNumber(i: img.renderingIntent());
+    int32 wantIntent = t.intentAt(at: i);
+    if (intent != wantIntent) { return "rendering intent ${intent}, libpng ${wantIntent}"; }
+    isize iccLength = 0;
+    uint32 iccSum = 0;
+    borrow img.iccProfile() as b { iccLength = b.length(); if (iccLength > 0) { iccSum = crc32(bytes: b); } }
+    isize wantIcc = t.iccLengthAt(at: i);
+    uint32 wantIccSum = t.iccCrcAt(at: i);
+    if (iccLength != wantIcc || iccSum != wantIccSum) { return "ICC profile ${iccLength} bytes (CRC ${iccSum}), libpng ${wantIcc} (${wantIccSum})"; }
+    isize exifLength = 0;
+    uint32 exifSum = 0;
+    borrow img.exif() as b { exifLength = b.length(); if (exifLength > 0) { exifSum = crc32(bytes: b); } }
+    isize wantExif = t.exifLengthAt(at: i);
+    uint32 wantExifSum = t.exifCrcAt(at: i);
+    if (exifLength != wantExif || exifSum != wantExifSum) { return "Exif ${exifLength} bytes (CRC ${exifSum}), libpng ${wantExif} (${wantExifSum})"; }
+    Optional<Cicp> c = img.cicp();
+    int64 cicp = match (c) {
+        case None: -1i64;
+        case Some(value: v): (cast<int64>(v.primaries) << 24) | (cast<int64>(v.transfer) << 16) | (cast<int64>(v.matrix) << 8) | (v.fullRange ? 1i64 : 0i64);
+    };
+    int64 wantCicp = t.cicpAt(at: i);
+    if (cicp != wantCicp) { return "cICP ${cicp}, libpng ${wantCicp}"; }
+    uint32 m = mdcvCrc(m: img.masteringDisplay());
+    uint32 wantM = t.mdcvCrcAt(at: i);
+    if (m != wantM) { return "mDCV's CRC ${m}, libpng ${wantM}"; }
+    Optional<ContentLight> l = img.contentLight();
+    int64 cll = match (l) { case None: -1i64; case Some(value: v): cast<int64>(v.maxCll); };
+    int64 fall = match (l) { case None: -1i64; case Some(value: v): cast<int64>(v.maxFall); };
+    int64 wantCll = t.maxCllAt(at: i);
+    int64 wantFall = t.maxFallAt(at: i);
+    if (cll != wantCll || fall != wantFall) { return "cLLI ${cll} ${fall}, libpng ${wantCll} ${wantFall}"; }
+    return "";
+}
+
 // Every fixture, decoded and held to libpng's answer.
 fn void fixtures(ref Run run) {
     Table t = Table.make();
@@ -87,6 +186,7 @@ fn void fixtures(ref Run run) {
             match (give r) {
                 case Ok(value: img): {
                     string why = compare(img: img, t: t, i: i);
+                    if (why.isEmpty()) { why = compareColour(img: img, t: t, i: i); }
                     if (why.isEmpty()) { run.pass(); } else { run.fail(name: name, why: why); }
                 }
                 case Err(error: e): {
@@ -114,6 +214,7 @@ fn uint8 main() {
     Run run = Run.make();
     fixtures(run: ref run);
     strictCases(run: ref run);
+    colourCases(run: ref run);
     int32 n = run.count();
     int32 f = run.failures();
     println(s: "image tests: ${n} cases, ${f} failed");

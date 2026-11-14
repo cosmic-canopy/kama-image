@@ -1,0 +1,51 @@
+// What a file says about its image besides its pixels and its colour space, kept on the image as the file gives it
+// (AGENTS.image.md § Decided, 1): the rendering intent, H.273's code points, and an HDR image's mastering display and
+// content light levels. An ICC profile and Exif data are kept as their bytes, on `Image` itself.
+
+export { RenderingIntent, Cicp, MasteringDisplay, ContentLight };
+
+// The rendering intent an sRGB chunk names (ICC's four).
+type enum RenderingIntent { Perceptual, RelativeColorimetric, Saturation, AbsoluteColorimetric }
+
+// ITU-T H.273's code points as PNG's cICP holds them, kept whether or not `Primaries` and `Transfer` name them.
+type value Cicp {
+    public uint8 primaries;
+    public uint8 transfer;
+    public uint8 matrix;
+    public bool fullRange;
+
+    public ctor make(uint8 primaries, uint8 transfer, uint8 matrix, bool fullRange) {
+        this.primaries = primaries;
+        this.transfer = transfer;
+        this.matrix = matrix;
+        this.fullRange = fullRange;
+    }
+}
+
+// The colour volume of the display an HDR image was mastered on (PNG's mDCV, SMPTE ST 2086): chromaticities in units of
+// 0.00002, luminance in units of 0.0001 cd/m².
+type value MasteringDisplay {
+    public uint16 redX = 0;
+    public uint16 redY = 0;
+    public uint16 greenX = 0;
+    public uint16 greenY = 0;
+    public uint16 blueX = 0;
+    public uint16 blueY = 0;
+    public uint16 whiteX = 0;
+    public uint16 whiteY = 0;
+    public uint32 maxLuminance = 0;
+    public uint32 minLuminance = 0;
+
+    public ctor zero() { }
+}
+
+// An HDR image's content light levels (PNG's cLLI, CTA-861.3), in units of 0.0001 cd/m²; 0 is unknown.
+type value ContentLight {
+    public uint32 maxCll = 0;
+    public uint32 maxFall = 0;
+
+    public ctor make(uint32 maxCll, uint32 maxFall) {
+        this.maxCll = maxCll;
+        this.maxFall = maxFall;
+    }
+}

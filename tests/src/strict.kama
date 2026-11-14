@@ -12,7 +12,7 @@ import {
     Run,
 };
 
-export { strictCases };
+export { strictCases, put32, chunk, signature, header, deflated, rowsOf, empty, refusedAs };
 
 fn void put32(ref DynamicArray<uint8> b, uint32 v) {
     b.add(item: truncate<uint8>(v >> 24));

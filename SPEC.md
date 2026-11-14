@@ -6,8 +6,9 @@ tested. What comes next is [ROADMAP.md](ROADMAP.md), the decided design and its 
 the git log and [CHANGELOG.md](CHANGELOG.md).
 
 **Where it stands** (2026-11-14, kama 0.9.949): the `Image` type, and PNG decoding of every colour type and bit depth,
-palettes, `tRNS` and Adam7 interlacing, strict and within limits, held to libpng's pixels on every PngSuite file and on
-the crafted cases, natively on Windows (debug and release) and on wasm under node. Not published.
+palettes, `tRNS` and Adam7 interlacing, and the colour chunks, strict and within limits. Every PngSuite file and the
+crafted cases are held to libpng's pixels and to what libpng keeps of their colour chunks, natively on Windows (debug
+and release) and on wasm under node. Not published.
 
 ## Using it
 
@@ -47,15 +48,33 @@ samples row by row from the top, four channels interleaved where the format has 
   `R16Unorm`, `Rg16Unorm`, `Rgba16Unorm`, `Rgba16Float` (a half float's bits as `uint16`) and `Rgba32Float`. It is
   `@nonExhaustive`. `channels()` and `sampleBytes()` answer 1, 2 or 4.
 - **`AlphaMode`:** `Opaque`, `Straight` or `Premultiplied`.
-- **`ColorSpace`:** `primaries` (`Unspecified`, `Bt709`, `DisplayP3`, `Bt2020`) and `transfer` (`Unspecified`, `Srgb`,
-  `Linear`, `Pq`, `Hlg`), with `unspecified()`, `srgb()`, `linearSrgb()` and `make(primaries:, transfer:)`. A PNG decodes
-  to `unspecified()` for now.
+- **`ColorSpace`**, a value:
+  - `primaries`: `Unspecified`, `Bt709`, `DisplayP3`, `Bt2020`, `Custom` (chromaticities no named set matches) or
+    `IccProfile` (an embedded profile describes them);
+  - `transfer`: `Unspecified`, `Srgb`, `Linear`, `Gamma` (a power curve), `Pq`, `Hlg` or `IccProfile`;
+  - `gamma`: a gAMA chunk's value as PNG stores it, the encoding exponent × 100000 (45455 is 1/2.2), when the transfer
+    came from one, else 0;
+  - `chromaticities`: a cHRM chunk's white point and primaries (`Chromaticities`, CIE x and y × 100000), when the
+    primaries came from one, else all 0;
+  - built with `unspecified()`, `srgb()`, `linearSrgb()` and `make(primaries:, transfer:)`.
 - **Built from samples:** `Image.fromSamples8`, `fromSamples16` and `fromSamplesF32(width:, height:, format:, alpha:,
   colorSpace:, samples:)` take a `FixedArray` of exactly width × height × channels samples of the format's type, and
   refuse anything else as `ImageErrorKind::Samples`.
 - **Read:** `width()`, `height()`, `format()`, `alpha()`, `colorSpace()`; and the windows `bytes()` (every sample in the
   host's byte order, little-endian on every target kama builds for), `samples8()`, `samples16()` and `samplesF32()`,
   each empty unless the image holds samples of its type. Each window is a mint: `borrow img.bytes() as b { … }`.
+- **What a file says besides its pixels,** kept as it says it and never applied to the samples:
+  - `iccProfile()`, a window on the embedded ICC profile's bytes, and `iccProfileName()`, its name as UTF-8;
+  - `exif()`, a window on the Exif data's bytes;
+  - `renderingIntent()`, an `Optional<RenderingIntent>` (`Perceptual`, `RelativeColorimetric`, `Saturation`,
+    `AbsoluteColorimetric`);
+  - `cicp()`, an `Optional<Cicp>`: H.273's `primaries`, `transfer` and `matrix` code points and `fullRange`, kept
+    whether or not `ColorSpace` names them;
+  - `masteringDisplay()`, an `Optional<MasteringDisplay>`: its red, green, blue and white x and y in units of
+    0.00002, and its `maxLuminance` and `minLuminance` in units of 0.0001 cd/m²;
+  - `contentLight()`, an `Optional<ContentLight>`: `maxCll` and `maxFall`, in units of 0.0001 cd/m².
+- **Set,** by a decoder or by a program about to encode: `setColorSpace`, `setIccProfile(name:, profile:)`, `setExif`,
+  `setRenderingIntent`, `setCicp`, `setMasteringDisplay` and `setContentLight`. None changes the samples.
 
 ## Errors
 
@@ -97,22 +116,61 @@ byte's) and `chunk()` (the chunk's type as PNG stores it, 0 for none; `chunkCode
   | `Palette` | a `PLTE` that is not a whole number of entries, is empty, holds more than 256 or more than the bit depth allows, or a pixel naming an entry past its end |
   | `Data` | image data that is not a zlib stream, that inflates to fewer or more bytes than the image needs, or a row with no filter 0 to 4 |
   | `DataChecksum` | the zlib stream's Adler-32 does not match |
-  | `Limit` | the image, its data or a chunk would pass a limit |
+  | `Limit` | the image, its data or a chunk would pass a limit, or an `iCCP` profile inflates past one, or Exif data would pass `maxBytes` |
   | `Unsupported` | a critical chunk this decoder does not know |
-- **Dropped:** an ancillary chunk with a bad CRC, a second `tRNS`, a `tRNS` after the image data or the wrong length for
-  its colour type, and every ancillary chunk this decoder does not read. Bytes after `IEND` are not read.
+- **The colour space,** by the PNG Third Edition's precedence (§ 4.3):
+  1. a `cICP` this package names: matrix 0, full range, primaries 1 (`Bt709`), 9 (`Bt2020`) or 12 (`DisplayP3`), and
+     transfer 13 (`Srgb`), 8 (`Linear`), 16 (`Pq`) or 18 (`Hlg`);
+  2. else an `iCCP`, as `IccProfile` for both. The profile is never matched against sRGB's, as libpng since 1.6.47 does
+     not;
+  3. else `sRGB`, as `Bt709` and `Srgb`;
+  4. else `gAMA` and `cHRM` together or alone: a gAMA of 100000 is `Linear`, any other `Gamma`; chromaticities within
+     0.001 of BT.709's, Display P3's or BT.2020's are named, any others `Custom`.
+- **The colour chunks kept,** each as libpng 1.6.50 keeps it: `cICP`, `iCCP`, `sRGB`, `gAMA`, `cHRM`, `mDCV` and `cLLI`
+  before `PLTE` and `IDAT` and once; `eXIf` anywhere after `IHDR`, once. An `iCCP` profile is inflated within
+  `maxChunkBytes` and `maxBytes`, and kept when it passes libpng's checks:
+  - its declared length is its length, and at least 132;
+  - a version 4 profile's length is a multiple of 4;
+  - its tag table, and each tag, lie inside it;
+  - its rendering intent is below `0xffff`;
+  - it has the `acsp` signature;
+  - an RGB profile is on a colour image and a grey one on a grey image;
+  - it is not an abstract profile.
+- **Dropped:**
+  - an ancillary chunk with a bad CRC, a repeated one, or one out of place;
+  - a `tRNS` the wrong length for its colour type;
+  - an `sRGB` intent past 3;
+  - a `gAMA` of 0, which libpng 1.6.59 reports as 1.0 (PNG Third Edition § 13.2), or past 2³¹−1;
+  - a `cHRM` value past 2³¹−1;
+  - an `iCCP` whose name is not 1 to 79 bytes, whose compression method is not 0, or whose profile is malformed;
+  - an `eXIf` that does not start `II*\0` or `MM\0*`;
+  - every ancillary chunk this decoder does not read.
+
+  Bytes after `IEND` are not read.
 
 ## Tests
 
 `tools/test.sh` is the gate: the roadmap's shape (`tools/check-roadmap.sh`), `kama check` on the package and its tests,
 then `tests/`, one program, built debug and release and run natively, and built for the web and run under node with its
-fixtures embedded. 214 cases on each leg:
+fixtures embedded. 259 cases on each leg:
 
 - **Every fixture held to libpng's answer:** PngSuite 2017jul19's 176 files (`tests/fixtures/pngsuite/`, with its
-  licence) and 10 crafted cases (`tests/fixtures/crafted/`, written by `tools/reference/craft.mjs`), each the same size,
-  format, alpha and samples (their CRC-32) as libpng 1.6.59 decodes it, or refused with the kind of error libpng's words
-  name. The expectations are `tests/src/expected.kama`, written on purpose by `tools/reference/run.sh` from
+  licence) and 27 crafted cases (`tests/fixtures/crafted/`, written by `tools/reference/craft.mjs`):
+  - each decoded one has the same size, format, alpha and samples (their CRC-32) as libpng 1.6.59 decodes it;
+  - each also has what libpng keeps of its colour chunks (the profile and Exif data by CRC-32, the cICP code points,
+    mDCV by CRC-32, cLLI), and the colour space they give by the precedence above;
+  - each refused one has the kind of error libpng's words name.
+
+  The expectations are `tests/src/expected.kama`, written on purpose by `tools/reference/run.sh` from
   `tools/reference/expected.c`, never by the gate.
 - **The refusals no fixture reaches,** each on a PNG built byte by byte (`tests/src/strict.kama`): each limit, the
   chunk rules, IHDR's other fields, `tRNS` kept and dropped, image data that is malformed or the wrong length, a pixel
   past the palette's end, an error's message, and an image built from samples that do not fit it.
+- **The colour chunks' rules no fixture reaches** (`tests/src/colour.kama`):
+  - each libpng check on an ICC profile, one field at a time;
+  - a profile's compression method and name, a Latin-1 name, and a profile that inflates past `maxChunkBytes`;
+  - the tolerance a named set of chromaticities is matched within;
+  - a cICP this package does not name;
+  - a gAMA of 0, out of place, or repeated;
+  - Exif repeated, short, or past `maxBytes`;
+  - mDCV and cLLI of the wrong length.

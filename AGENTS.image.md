@@ -23,9 +23,9 @@ image format). Its first users:
 ## Where things stand
 
 **Seeded on 2026-11-14 with `kama seed` on kama 0.9.947+gf919c10e; built on 0.9.949, kyoten's pin.** IMG-1, PNG
-decoding, is under way: its first part is built ([SPEC.md](SPEC.md)), and its colour chunks, options and gate sweep
-come next ([ROADMAP_DETAIL.md](ROADMAP_DETAIL.md#png-decode)). Whether it is a first-party package, as kama ruled
-`@kama/graphics` one (KR-309), is kama's to rule; the owner relays the question.
+decoding, is under way: its first two parts are built, the decode and the colour chunks ([SPEC.md](SPEC.md)), and its
+options and gate sweep come next ([ROADMAP_DETAIL.md](ROADMAP_DETAIL.md#png-decode)). Whether it is a first-party
+package, as kama ruled `@kama/graphics` one (KR-309), is kama's to rule; the owner relays the question.
 
 **A short design pass comes before any code,** as `@kama/graphics`' and `@kama/audio`'s did. Each question is measured
 first where it can be, then asked of the owner in full: the problem, an example, the options and the production
@@ -63,6 +63,16 @@ evidence is [RESEARCH.md](RESEARCH.md), its probes in `.scratch/img-probe-*/`. A
        alpha untracked, and Bevy makes every 16-bit image linear.
      - 16 bits survive: The Mallow Man's `pine_bark_disp_2k.png` is a 16-bit grey height map.
      - WebGPU has no three-channel format.
+   - **Settled while building IMG-1, the same day, under the owner's word above:**
+     - **`Transfer` has `Gamma`, and `Primaries` has `Custom`,** for a gAMA and a cHRM that name no curve or set.
+       Their numbers stay on the `ColorSpace` (`gamma`, `chromaticities`), so a renderer is never handed a guess.
+       Chromaticities within 0.001 of BT.709's, Display P3's or BT.2020's are named.
+     - **An embedded ICC profile is the colour space's source, `IccProfile` for both,** and is never matched against
+       sRGB's. libpng recognised known sRGB profiles until 1.6.47 changed to the PNG Third Edition's precedence, and its
+       1.6.50 source has no such table. A program that needs the profile's meaning reads `iccProfile()`.
+     - **A gAMA of 0 is dropped,** where libpng 1.6.59 reports it as 1.0. A gamma of 0 means nothing, and the PNG Third
+       Edition (§ 13.2) lets an unexpected value in an ancillary chunk be ignored. This is the one place the tests hold
+       the decoder to its own answer over libpng's.
 2. **Decided on 2026-11-14: a decode is strict by default, within limits, and never ends the program** (question 3).
    The owner: "I will take your recommendation."
    - **`DecodeLimits`**, each raisable or lowerable by the caller:
@@ -84,6 +94,8 @@ evidence is [RESEARCH.md](RESEARCH.md), its probes in `.scratch/img-probe-*/`. A
      - a coverage-guided libFuzzer run over kama's emitted C on Linux (WSL2 here, CI later), a **stopgap** until kama's
        KR-205, `kama fuzz`, replaces it.
    - **Why:** RESEARCH § 3.
+   - **Settled while building IMG-1:** an iCCP profile that inflates past `maxChunkBytes` or `maxBytes`, and Exif data
+     past `maxBytes`, refuse the file as `Limit`, as every limit does. A profile that is merely malformed is dropped.
 3. **Decided on 2026-11-14: every format is roadmapped, and PNG is built now** (question 4). The owner: "It sounds like we
    roadmap them all and do what you recommend now."
    - **The order:**

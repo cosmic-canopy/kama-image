@@ -1,0 +1,260 @@
+// The colour chunks' rules no fixture reaches, each on a PNG built byte by byte (AGENTS.image.md § Decided, 1 and 2):
+// what is dropped and what is kept, the tolerance a named set of chromaticities is matched within, an ICC profile
+// checked as libpng 1.6.50 checks one, and the limits an inflated profile and Exif data are held to. One departs from
+// libpng on purpose: a gAMA of 0, which libpng 1.6.59 reports as 1.0, is dropped (PNG Third Edition § 13.2).
+
+import {
+    std::collections::DynamicArray, std::compress::zlib::ZlibWriter, std::compress::deflate::DeflateLevel, std::io::StringWriter,
+    image::Image, image::ImageError, image::ImageErrorKind, image::ColorSpace, image::Primaries, image::Transfer, image::Cicp,
+    image::DecodeOptions,
+    image::png::decode,
+    Run, put32, chunk, signature, header, deflated, rowsOf, empty, refusedAs,
+};
+
+export { colourCases };
+
+fn DynamicArray<uint8> u32s(InlineArray<uint32>#(8) v, isize n) {
+    DynamicArray<uint8> b = DynamicArray.empty();
+    for (isize i = 0; i < n; i = i + 1) { put32(b: ref b, v: v[i]); }
+    return give b;
+}
+
+fn DynamicArray<uint8> bytesOf(InlineArray<uint8>#(8) v, isize n) {
+    DynamicArray<uint8> b = DynamicArray.empty();
+    for (isize i = 0; i < n; i = i + 1) { b.add(item: v[i]); }
+    return give b;
+}
+
+// An 8x8 RGB file with `before` chunks ahead of the image data and `after` chunks behind it, each list already framed.
+fn DynamicArray<uint8> rgbFile(const ref DynamicArray<uint8> before, const ref DynamicArray<uint8> after) {
+    DynamicArray<uint8> png = signature();
+    chunk(png: ref png, kind: "IHDR", data: header(w: 4ui32, h: 4ui32, depth: 8, colourType: 2), badCrc: false);
+    png.addAll(items: before.view());
+    chunk(png: ref png, kind: "IDAT", data: deflated(raw: rowsOf(rows: 4, rowBytes: 12, filter: 0, fill: 9)), badCrc: false);
+    png.addAll(items: after.view());
+    chunk(png: ref png, kind: "IEND", data: empty(), badCrc: false);
+    return give png;
+}
+
+fn DynamicArray<uint8> framed(const ref string kind, const ref DynamicArray<uint8> data) {
+    DynamicArray<uint8> b = DynamicArray.empty();
+    chunk(png: ref b, kind: kind, data: data, badCrc: false);
+    return give b;
+}
+
+fn DynamicArray<uint8> gama(uint32 g) { DynamicArray<uint8> d = DynamicArray.empty(); put32(b: ref d, v: g); return framed(kind: "gAMA", data: d); }
+
+// A smallest valid ICC profile, 132 bytes and no tags, which the cases then break one field at a time: its length (at 0),
+// version (8), class (12), colour space (16), signature (36), rendering intent (64) and tag count (128).
+fn DynamicArray<uint8> profile(uint32 length, uint8 version, uint32 profileClass, uint32 space, uint32 magic, uint32 intent,
+                               uint32 tags, isize size) {
+    DynamicArray<uint8> p = DynamicArray.empty();
+    for (isize i = 0; i < size; i = i + 1) { p.add(item: 0); }
+    InlineArray<uint32>#(8) at = [0ui32, 12ui32, 16ui32, 36ui32, 64ui32, 128ui32, 0ui32, 0ui32];
+    InlineArray<uint32>#(8) v = [length, profileClass, space, magic, intent, tags, 0ui32, 0ui32];
+    for (isize f = 0; f < 6; f = f + 1) {
+        isize o = cast<isize>(at[f]);
+        p[o] = truncate<uint8>(v[f] >> 24); p[o + 1] = truncate<uint8>(v[f] >> 16);
+        p[o + 2] = truncate<uint8>(v[f] >> 8); p[o + 3] = truncate<uint8>(v[f]);
+    }
+    p[8] = version;
+    return give p;
+}
+
+fn DynamicArray<uint8> goodProfile() {
+    return profile(length: 132ui32, version: 2, profileClass: 0x6D6E7472ui32, space: 0x52474220ui32, magic: 0x61637370ui32,
+                   intent: 0ui32, tags: 0ui32, size: 132);
+}
+
+// An iCCP chunk: the name's bytes, a 0, `method`, then the profile deflated.
+fn DynamicArray<uint8> iccp(const ref DynamicArray<uint8> name, uint8 method, const ref DynamicArray<uint8> p) {
+    DynamicArray<uint8> d = DynamicArray.empty();
+    d.addAll(items: name.view());
+    d.add(item: 0);
+    d.add(item: method);
+    DynamicArray<uint8> z = deflated(raw: p);
+    d.addAll(items: z.view());
+    return framed(kind: "iCCP", data: d);
+}
+
+fn DynamicArray<uint8> nameOf(const ref string text) {
+    DynamicArray<uint8> b = DynamicArray.empty();
+    borrow text.bytes() as t { foreach (uint8 c in t) { b.add(item: c); } }
+    return give b;
+}
+
+fn string spaceName(const ref ColorSpace s) {
+    string p = match (s.primaries) {
+        case Unspecified: "Unspecified"; case Bt709: "Bt709"; case DisplayP3: "DisplayP3"; case Bt2020: "Bt2020";
+        case Custom: "Custom"; case IccProfile: "IccProfile"; case _: "later";
+    };
+    string t = match (s.transfer) {
+        case Unspecified: "Unspecified"; case Srgb: "Srgb"; case Linear: "Linear"; case Gamma: "Gamma"; case Pq: "Pq";
+        case Hlg: "Hlg"; case IccProfile: "IccProfile"; case _: "later";
+    };
+    return p + " " + t;
+}
+
+// Expects `png` to decode, its colour space named `want` ("Bt709 Srgb"), its gamma `gamma`, its profile `iccBytes` longName
+// and its Exif `exifBytes` longName.
+fn void expectSpace(ref Run run, const ref string name, const ref DynamicArray<uint8> png, const ref string want, uint32 gamma,
+                    isize iccBytes, isize exifBytes) {
+    Result<Image, ImageError> r = decode(bytes: png.view(), options: DecodeOptions.defaults());
+    match (give r) {
+        case Err(error: e): { string m = e.message(); run.fail(name: name, why: "refused: ${m}"); }
+        case Ok(value: img): {
+            ColorSpace s = img.colorSpace();
+            string got = spaceName(s: s);
+            isize icc = 0;
+            isize exif = 0;
+            borrow img.iccProfile() as b { icc = b.length(); }
+            borrow img.exif() as b { exif = b.length(); }
+            uint32 g = s.gamma;
+            if (got != want) { run.fail(name: name, why: "${got}, not ${want}"); }
+            else if (g != gamma) { run.fail(name: name, why: "gamma ${g}, not ${gamma}"); }
+            else if (icc != iccBytes) { run.fail(name: name, why: "a profile of ${icc} bytes, not ${iccBytes}"); }
+            else if (exif != exifBytes) { run.fail(name: name, why: "Exif of ${exif} bytes, not ${exifBytes}"); }
+            else { run.pass(); }
+        }
+    };
+}
+
+fn void colourCases(ref Run run) {
+    DynamicArray<uint8> none = DynamicArray.empty();
+
+    // gAMA
+    expectSpace(run: ref run, name: "a gAMA of 0, dropped (libpng reads it as 1.0)", png: rgbFile(before: gama(g: 0ui32), after: none),
+                want: "Unspecified Unspecified", gamma: 0ui32, iccBytes: 0, exifBytes: 0);
+    expectSpace(run: ref run, name: "a gAMA after the image data, dropped", png: rgbFile(before: none, after: gama(g: 45455ui32)),
+                want: "Unspecified Unspecified", gamma: 0ui32, iccBytes: 0, exifBytes: 0);
+    {
+        DynamicArray<uint8> two = gama(g: 45455ui32);
+        two.addAll(items: gama(g: 100000ui32).view());
+        expectSpace(run: ref run, name: "a second gAMA, dropped", png: rgbFile(before: two, after: none),
+                    want: "Unspecified Gamma", gamma: 45455ui32, iccBytes: 0, exifBytes: 0);
+    }
+
+    // cICP that this package does not name is kept, and the next chunk gives the colour space
+    {
+        InlineArray<uint8>#(8) codes = [12, 13, 1, 1, 0, 0, 0, 0];   // Display P3 and sRGB's curve, were its matrix 0
+        DynamicArray<uint8> before = framed(kind: "cICP", data: bytesOf(v: codes, n: 4));
+        InlineArray<uint8>#(8) intent = [0, 0, 0, 0, 0, 0, 0, 0];
+        before.addAll(items: framed(kind: "sRGB", data: bytesOf(v: intent, n: 1)).view());
+        DynamicArray<uint8> png = rgbFile(before: before, after: none);
+        expectSpace(run: ref run, name: "a cICP with matrix 1, not named", png: png, want: "Bt709 Srgb", gamma: 0ui32, iccBytes: 0, exifBytes: 0);
+        Result<Image, ImageError> r = decode(bytes: png.view(), options: DecodeOptions.defaults());
+        uint8 matrix = 0;
+        match (give r) {
+            case Ok(value: img): { Optional<Cicp> c = img.cicp(); matrix = match (c) { case Some(value: v): v.matrix; case None: 0; }; }
+            case Err(error: e): { }
+        };
+        if (matrix == 1) { run.pass(); } else { run.fail(name: "a cICP not named, kept", why: "matrix ${matrix}"); }
+    }
+    {
+        InlineArray<uint8>#(8) codes = [1, 13, 0, 0, 0, 0, 0, 0];
+        expectSpace(run: ref run, name: "a narrow-range cICP, not named", png: rgbFile(before: framed(kind: "cICP", data: bytesOf(v: codes, n: 4)), after: none),
+                    want: "Unspecified Unspecified", gamma: 0ui32, iccBytes: 0, exifBytes: 0);
+    }
+
+    // cHRM: named within 0.001
+    {
+        InlineArray<uint32>#(8) near = [31300ui32, 32900ui32, 64000ui32, 33000ui32, 30000ui32, 60000ui32, 15000ui32, 6000ui32];
+        expectSpace(run: ref run, name: "BT.709's chromaticities 0.0003 off, named", png: rgbFile(before: framed(kind: "cHRM", data: u32s(v: near, n: 8)), after: none),
+                    want: "Bt709 Unspecified", gamma: 0ui32, iccBytes: 0, exifBytes: 0);
+        InlineArray<uint32>#(8) far = [31380ui32, 32900ui32, 64000ui32, 33000ui32, 30000ui32, 60000ui32, 15000ui32, 6000ui32];
+        expectSpace(run: ref run, name: "BT.709's chromaticities 0.0011 off, custom", png: rgbFile(before: framed(kind: "cHRM", data: u32s(v: far, n: 8)), after: none),
+                    want: "Custom Unspecified", gamma: 0ui32, iccBytes: 0, exifBytes: 0);
+        InlineArray<uint32>#(8) wide = [0x80000000ui32, 32900ui32, 64000ui32, 33000ui32, 30000ui32, 60000ui32, 15000ui32, 6000ui32];
+        expectSpace(run: ref run, name: "a cHRM value past 31 bits, dropped", png: rgbFile(before: framed(kind: "cHRM", data: u32s(v: wide, n: 8)), after: none),
+                    want: "Unspecified Unspecified", gamma: 0ui32, iccBytes: 0, exifBytes: 0);
+    }
+
+    // iCCP: kept when libpng 1.6.50's checks pass, otherwise dropped, so sRGB gives the colour space
+    {
+        InlineArray<uint8>#(8) intent = [0, 0, 0, 0, 0, 0, 0, 0];
+        DynamicArray<uint8> srgb = framed(kind: "sRGB", data: bytesOf(v: intent, n: 1));
+        DynamicArray<uint8> name = nameOf(text: "probe");
+        DynamicArray<uint8> good = iccp(name: name, method: 0, p: goodProfile());
+        good.addAll(items: srgb.view());
+        expectSpace(run: ref run, name: "a valid profile, ahead of sRGB", png: rgbFile(before: good, after: none),
+                    want: "IccProfile IccProfile", gamma: 0ui32, iccBytes: 132, exifBytes: 0);
+
+        DynamicArray<uint8> m1 = iccp(name: name, method: 1, p: goodProfile());
+        m1.addAll(items: srgb.view());
+        expectSpace(run: ref run, name: "a profile with compression method 1, dropped", png: rgbFile(before: m1, after: none),
+                    want: "Bt709 Srgb", gamma: 0ui32, iccBytes: 0, exifBytes: 0);
+
+        DynamicArray<uint8> longName = DynamicArray.empty();
+        for (isize i = 0; i < 80; i = i + 1) { longName.add(item: 120); }
+        DynamicArray<uint8> n80 = iccp(name: longName, method: 0, p: goodProfile());
+        n80.addAll(items: srgb.view());
+        expectSpace(run: ref run, name: "a profile named with 80 characters, dropped", png: rgbFile(before: n80, after: none),
+                    want: "Bt709 Srgb", gamma: 0ui32, iccBytes: 0, exifBytes: 0);
+
+        // one field of the header at a time
+        InlineArray<uint32>#(8) lengths = [133ui32, 132ui32, 132ui32, 132ui32, 132ui32, 132ui32, 134ui32, 144ui32];
+        InlineArray<uint32>#(8) classes = [0x6D6E7472ui32, 0x6D6E7472ui32, 0x6D6E7472ui32, 0x61627374ui32, 0x6D6E7472ui32, 0x6D6E7472ui32, 0x6D6E7472ui32, 0x6D6E7472ui32];
+        InlineArray<uint32>#(8) spaces = [0x52474220ui32, 0x52474220ui32, 0x47524159ui32, 0x52474220ui32, 0x52474220ui32, 0x52474220ui32, 0x52474220ui32, 0x52474220ui32];
+        InlineArray<uint32>#(8) signatures = [0x61637370ui32, 0x78787878ui32, 0x61637370ui32, 0x61637370ui32, 0x61637370ui32, 0x61637370ui32, 0x61637370ui32, 0x61637370ui32];
+        InlineArray<uint32>#(8) intents = [0ui32, 0ui32, 0ui32, 0ui32, 0xffffui32, 0ui32, 0ui32, 0ui32];
+        InlineArray<uint32>#(8) tagCounts = [0ui32, 0ui32, 0ui32, 0ui32, 0ui32, 2ui32, 0ui32, 1ui32];
+        InlineArray<uint8>#(8) versions = [2, 2, 2, 2, 2, 2, 4, 2];
+        InlineArray<isize>#(8) sizes = [132, 132, 132, 132, 132, 132, 134, 144];
+        for (isize f = 0; f < 8; f = f + 1) {
+            DynamicArray<uint8> p = profile(length: lengths[f], version: versions[f], profileClass: classes[f], space: spaces[f],
+                                            magic: signatures[f], intent: intents[f], tags: tagCounts[f], size: sizes[f]);
+            if (f == 7) {
+                // one tag, starting past the profile's end
+                p[132 + 7] = 200;
+                p[132 + 11] = 4;
+            }
+            DynamicArray<uint8> b = iccp(name: name, method: 0, p: p);
+            b.addAll(items: srgb.view());
+            string which = f == 0 ? "a length the profile does not have" : f == 1 ? "no acsp signature" : f == 2 ? "a grey profile on an RGB image"
+                : f == 3 ? "an abstract profile" : f == 4 ? "a rendering intent of 0xffff" : f == 5 ? "more tags than it holds"
+                : f == 6 ? "a version 4 profile whose length is not a multiple of 4" : "a tag past its end";
+            expectSpace(run: ref run, name: "a profile with ${which}, dropped", png: rgbFile(before: b, after: none),
+                        want: "Bt709 Srgb", gamma: 0ui32, iccBytes: 0, exifBytes: 0);
+        }
+
+        // a Latin-1 name reaches the program as UTF-8
+        DynamicArray<uint8> cafe = nameOf(text: "caf");
+        cafe.add(item: 0xE9);
+        Result<Image, ImageError> r = decode(bytes: rgbFile(before: iccp(name: cafe, method: 0, p: goodProfile()), after: none).view(),
+                                             options: DecodeOptions.defaults());
+        string got = match (give r) { case Ok(value: img): img.iccProfileName(); case Err(error: e): "refused"; };
+        if (got == "café") { run.pass(); } else { run.fail(name: "a profile named in Latin-1", why: "named \"${got}\""); }
+
+        // past maxChunkBytes once inflated: refused, at the iCCP chunk
+        DecodeOptions small = DecodeOptions.defaults();
+        small.limits.maxChunkBytes = 100;
+        refusedAs(run: ref run, name: "a profile that inflates past maxChunkBytes", png: rgbFile(before: iccp(name: name, method: 0, p: goodProfile()), after: none),
+                  options: small, kind: ImageErrorKind::Limit, at: 33);
+    }
+
+    // eXIf
+    {
+        InlineArray<uint8>#(8) mm = [77, 77, 0, 42, 0, 0, 0, 8];
+        DynamicArray<uint8> two = framed(kind: "eXIf", data: bytesOf(v: mm, n: 8));
+        two.addAll(items: framed(kind: "eXIf", data: bytesOf(v: mm, n: 6)).view());
+        expectSpace(run: ref run, name: "a second eXIf, dropped", png: rgbFile(before: two, after: none),
+                    want: "Unspecified Unspecified", gamma: 0ui32, iccBytes: 0, exifBytes: 8);
+        expectSpace(run: ref run, name: "an eXIf of 3 bytes, dropped", png: rgbFile(before: framed(kind: "eXIf", data: bytesOf(v: mm, n: 3)), after: none),
+                    want: "Unspecified Unspecified", gamma: 0ui32, iccBytes: 0, exifBytes: 0);
+        DecodeOptions small = DecodeOptions.defaults();
+        small.limits.maxBytes = 64 + 4;   // the samples, and 4 bytes more
+        refusedAs(run: ref run, name: "Exif past maxBytes", png: rgbFile(before: framed(kind: "eXIf", data: bytesOf(v: mm, n: 8)), after: none),
+                  options: small, kind: ImageErrorKind::Limit, at: 33);
+    }
+
+    // mDCV and cLLI of the wrong length are dropped
+    {
+        InlineArray<uint32>#(8) v = [1ui32, 2ui32, 3ui32, 4ui32, 5ui32, 6ui32, 7ui32, 8ui32];
+        DynamicArray<uint8> both = framed(kind: "mDCV", data: u32s(v: v, n: 5));
+        both.addAll(items: framed(kind: "cLLI", data: u32s(v: v, n: 3)).view());
+        DynamicArray<uint8> png = rgbFile(before: both, after: none);
+        Result<Image, ImageError> r = decode(bytes: png.view(), options: DecodeOptions.defaults());
+        bool dropped = match (give r) { case Ok(value: img): img.masteringDisplay().isNone() && img.contentLight().isNone(); case Err(error: e): false; };
+        if (dropped) { run.pass(); } else { run.fail(name: "mDCV and cLLI of the wrong length", why: "kept, or refused"); }
+    }
+}

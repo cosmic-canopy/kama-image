@@ -135,3 +135,40 @@ write('hkey8.png', png({ w: 4, h: 4, depth: 8, colourType: 0, channels: 1, sampl
     extra: [chunk('tRNS', Buffer.from([1, 9]))] }));
 write('hkeyrgb.png', png({ w: 4, h: 4, depth: 8, colourType: 2, channels: 3,
     sample: (x, y, c) => c < 2 ? (y % 2 ? 7 : 6) : (x % 2 ? 7 : 8), extra: [chunk('tRNS', Buffer.from([0, 7, 0, 7, 0, 7]))] }));
+// 12. The colour chunks (PNG Third Edition § 4.3: cICP, then iCCP, then sRGB, then cHRM with gAMA), each case with the
+//     chunks it names before the image data and `after` it. What libpng keeps of each is the expectation.
+function colourPng({ depth = 8, colourType = 2, before = [], after = [], palette = false }) {
+    const channels = colourType === 2 ? 3 : colourType === 0 ? 1 : colourType === 3 ? 1 : 4;
+    const sample = colourType === 3 ? (x, y) => (x + y) % 2 : (x, y, c) => (x * 16 + y * 8 + c * 40) & 0xff;
+    const body = png({ w: 8, h: 8, depth, colourType, channels, sample, extra: [...(palette ? [chunk('PLTE', Buffer.from([10, 20, 30, 200, 100, 50]))] : []), ...before] });
+    if (!after.length) return body;
+    const iend = body.length - 12;   // IEND is the last 12 bytes
+    return Buffer.concat([body.subarray(0, iend), ...after, body.subarray(iend)]);
+}
+const u32s = (...v) => Buffer.concat(v.map(u32));
+const chrm = (...v) => chunk('cHRM', u32s(...v));
+const gama = (v) => chunk('gAMA', u32(v));
+const srgb = (i) => chunk('sRGB', Buffer.from([i]));
+const cicp = (...b) => chunk('cICP', Buffer.from(b));
+function iccp(profile) { return chunk('iCCP', Buffer.concat([Buffer.from('probe\0\0', 'latin1'), zlib.deflateSync(profile)])); }
+const goodIcc = iccProfile();
+const badIcc = Buffer.from(goodIcc); badIcc.write('xxxx', 36, 'latin1');   // no 'acsp'
+write('hc-chrm-p3.png', colourPng({ before: [chrm(31270, 32900, 68000, 32000, 26500, 69000, 15000, 6000), gama(45455)] }));
+write('hc-chrm-custom.png', colourPng({ before: [chrm(31000, 33000, 65000, 32000, 29000, 61000, 14000, 7000), gama(100000)] }));
+write('hc-chrm-alone.png', colourPng({ before: [chrm(31270, 32900, 64000, 33000, 30000, 60000, 15000, 6000)] }));
+write('hc-srgb-intent9.png', colourPng({ before: [srgb(9), gama(70000)] }));
+write('hc-srgb-twice.png', colourPng({ before: [srgb(2), srgb(0)] }));
+// sRGB after PLTE: out of place, so dropped
+write('hc-srgb-late.png', png({ w: 8, h: 8, depth: 8, colourType: 3, channels: 1, sample: (x, y) => (x + y) % 2,
+    extra: [chunk('PLTE', Buffer.from([10, 20, 30, 200, 100, 50])), srgb(1)] }));
+write('hc-icc-srgb.png', colourPng({ before: [iccp(goodIcc), srgb(1)] }));
+write('hc-icc-bad.png', colourPng({ before: [iccp(badIcc), srgb(3)] }));
+write('hc-icc-grey.png', colourPng({ colourType: 0, before: [iccp(goodIcc), gama(45455)] }));
+write('hc-cicp-unknown.png', colourPng({ before: [cicp(1, 1, 0, 0), srgb(0)] }));
+write('hc-cicp-p3-icc.png', colourPng({ before: [cicp(12, 13, 0, 1), iccp(goodIcc)] }));
+write('hc-hdr.png', colourPng({ depth: 16, before: [cicp(9, 16, 0, 1),
+    chunk('mDCV', Buffer.concat([u16s(35400, 14600, 8500, 39850, 6550, 2300, 15635, 16450), u32s(10000000, 50)])),
+    chunk('cLLI', u32s(10000000, 4000000))] }));
+write('hc-exif.png', colourPng({ after: [chunk('eXIf', Buffer.from('MM\0*\0\0\0\x08\0\0', 'latin1'))] }));
+write('hc-exif-bad.png', colourPng({ before: [chunk('eXIf', Buffer.from('XX\0*\0\0\0\x08', 'latin1'))] }));
+function u16s(...v) { return Buffer.concat(v.map((x) => { const b = Buffer.alloc(2); b.writeUInt16BE(x); return b; })); }

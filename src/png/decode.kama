@@ -12,9 +12,10 @@
 import {
     std::collections::DynamicArray, std::collections::FixedArray, std::collections::ConstView, std::collections::View,
     std::compress::zlib::ZlibReader, std::io::BufReader, std::io::SliceReader, std::io::IoError, std::io::IoErrorKind,
-    std::digest::crc32::crc32,
+    std::digest::crc32::crc32, std::encoding::utf8::decode as decodeUtf8, std::encoding::utf8::Utf8Error,
     image::Image, image::ImageError, image::ImageErrorKind, image::PixelFormat, image::AlphaMode, image::ColorSpace,
-    image::DecodeOptions,
+    image::Primaries, image::Transfer, image::Chromaticities, image::RenderingIntent, image::Cicp, image::MasteringDisplay,
+    image::ContentLight, image::DecodeOptions,
 };
 
 export { decode };
@@ -24,6 +25,14 @@ comptime uint32 PLTE = 0x504C5445ui32;
 comptime uint32 IDAT = 0x49444154ui32;
 comptime uint32 IEND = 0x49454E44ui32;
 comptime uint32 TRNS = 0x74524E53ui32;
+comptime uint32 CICP = 0x63494350ui32;
+comptime uint32 ICCP = 0x69434350ui32;
+comptime uint32 SRGB = 0x73524742ui32;
+comptime uint32 GAMA = 0x67414D41ui32;
+comptime uint32 CHRM = 0x6348524Dui32;
+comptime uint32 MDCV = 0x6D444356ui32;
+comptime uint32 CLLI = 0x634C4C49ui32;
+comptime uint32 EXIF = 0x65584966ui32;
 
 fn Result<Image, ImageError> refuse(ImageErrorKind kind, int64 at, uint32 chunk) {
     return Result::Err(error: ImageError.make(kind: kind, at: at, chunk: chunk));
@@ -161,8 +170,131 @@ type value Chunks {
     public int32 keyB = 0;
     public isize alphaEntries = 0;   // a tRNS for a palette: the entries it gives an alpha
     public int64 firstData = -1;     // the first IDAT's byte
+    // the colour chunks kept (AGENTS.image.md § Decided, 1), each before PLTE and IDAT and once
+    public bool hasCicp = false;
+    public int32 cicpPrimaries = 0;
+    public int32 cicpTransfer = 0;
+    public int32 cicpMatrix = 0;
+    public int32 cicpRange = 0;
+    public bool hasIcc = false;
+    public bool hasSrgb = false;
+    public int32 intent = 0;
+    public bool hasGamma = false;
+    public int64 gamma = 0;
+    public bool hasChrm = false;
+    public Chromaticities chrm = Chromaticities.none();
+    public bool hasMdcv = false;
+    public MasteringDisplay mdcv = MasteringDisplay.zero();
+    public bool hasClli = false;
+    public ContentLight clli = ContentLight.make(maxCll: 0, maxFall: 0);
+    public bool hasExif = false;
 
     public ctor none() { }
+}
+
+fn uint16 be16(ConstView<uint8> b, isize at) { return (cast<uint16>(b[at]) << 8) | cast<uint16>(b[at + 1]); }
+
+// Within 0.001 of a named set of chromaticities?
+fn bool near(const ref Chromaticities c, int32 wx, int32 wy, int32 rx, int32 ry, int32 gx, int32 gy, int32 bx, int32 by) {
+    InlineArray<int32>#(8) got = [c.whiteX, c.whiteY, c.redX, c.redY, c.greenX, c.greenY, c.blueX, c.blueY];
+    InlineArray<int32>#(8) want = [wx, wy, rx, ry, gx, gy, bx, by];
+    for (isize i = 0; i < 8; i = i + 1) {
+        int32 d = got[i] - want[i];
+        if (d > 100 || d < -100) { return false; }
+    }
+    return true;
+}
+
+// An ICC profile checked as libpng 1.6.50 checks one before it keeps it (its png_icc_check_header and
+// png_icc_check_tag_table): the length it declares, the tag table inside it, its signature, its rendering intent, an RGB
+// profile for a colour image and a grey one for a grey image, and not an abstract one.
+fn bool iccValid(ConstView<uint8> b, int64 colourType) {
+    isize n = b.length();
+    if (n < 132) { return false; }
+    int64 size = cast<int64>(n);
+    if (cast<int64>(be32(b: b, at: 0)) != size) { return false; }
+    if (b[8] > 3 && n % 4 != 0) { return false; }
+    int64 tags = cast<int64>(be32(b: b, at: 128));
+    if (tags > (size - 132) / 12) { return false; }
+    if (be32(b: b, at: 64) >= 0xffffui32) { return false; }
+    if (be32(b: b, at: 36) != 0x61637370ui32) { return false; }
+    bool colour = colourType == 2 || colourType == 3 || colourType == 6;
+    uint32 space = be32(b: b, at: 16);
+    if (space == 0x52474220ui32) { if (!colour) { return false; } }
+    else if (space == 0x47524159ui32) { if (colour) { return false; } }
+    else { return false; }
+    if (be32(b: b, at: 12) == 0x61627374ui32) { return false; }
+    for (int64 t = 0; t < tags; t = t + 1) {
+        isize at = 132 + cast<isize>(t) * 12;
+        int64 start = cast<int64>(be32(b: b, at: at + 4));
+        int64 len = cast<int64>(be32(b: b, at: at + 8));
+        if (start > size || len > size - start) { return false; }
+    }
+    return true;
+}
+
+// An iCCP chunk's data: its profile inflated, at most `most` bytes, and checked, with its name in `name`; empty when the
+// chunk is dropped, and `tooLarge` set when the profile would pass `most`.
+fn DynamicArray<uint8> iccOf(ConstView<uint8> data, int64 colourType, int64 most, ref string name, ref bool tooLarge) {
+    isize n = data.length();
+    isize k = 0;
+    while (k < n && k < 80 && data[k] != 0) { k = k + 1; }
+    if (k < 1 || k > 79 || k + 2 > n || data[k + 1] != 0) { return DynamicArray.empty(); }
+    DynamicArray<uint8> packed = DynamicArray.empty();
+    packed.addAll(items: data.slice(from: k + 2, count: n - k - 2));
+    ZlibReader<SliceReader> z = ZlibReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: give packed)), limit: cast<uint64>(most));
+    DynamicArray<uint8> profile = DynamicArray.empty();
+    FixedArray<uint8> buf = FixedArray.make(size: 4096);
+    while (true) {
+        Result<isize, IoError> r = z.read(into: buf.viewMut());
+        isize m = match (r) { case Ok(value: v): v; case Err(error: e): { tooLarge = e.kind() == IoErrorKind::LimitExceeded; := -1; } };
+        if (m < 0) { return DynamicArray.empty(); }
+        if (m == 0) { break; }
+        profile.addAll(items: buf.view().slice(from: 0, count: m));
+    }
+    if (!iccValid(b: profile.view(), colourType: colourType)) { return DynamicArray.empty(); }
+    // Latin-1, as PNG's keywords are, to UTF-8
+    DynamicArray<uint8> utf8 = DynamicArray.empty();
+    for (isize i = 0; i < k; i = i + 1) {
+        uint8 c = data[i];
+        if (c < 0x80) { utf8.add(item: c); }
+        else { utf8.add(item: 0xC0 | (c >> 6)); utf8.add(item: 0x80 | (c & 0x3F)); }
+    }
+    Result<string, Utf8Error> text = decodeUtf8(bytes: utf8.view());
+    name = match (give text) { case Ok(value: t): give t; case Err(error: e): ""; };
+    return give profile;
+}
+
+// The colour space the chunks give, by the PNG Third Edition's precedence (§ 4.3): a cICP this package names (matrix
+// 0, full range, primaries 1, 9 or 12, transfer 8, 13, 16 or 18), else an ICC profile, else sRGB, else cHRM and gAMA.
+fn ColorSpace spaceOf(const ref Chunks c) {
+    if (c.hasCicp && c.cicpMatrix == 0 && c.cicpRange == 1) {
+        Primaries p = Primaries::Unspecified;
+        Transfer t = Transfer::Unspecified;
+        if (c.cicpPrimaries == 1) { p = Primaries::Bt709; }
+        if (c.cicpPrimaries == 9) { p = Primaries::Bt2020; }
+        if (c.cicpPrimaries == 12) { p = Primaries::DisplayP3; }
+        if (c.cicpTransfer == 13) { t = Transfer::Srgb; }
+        if (c.cicpTransfer == 8) { t = Transfer::Linear; }
+        if (c.cicpTransfer == 16) { t = Transfer::Pq; }
+        if (c.cicpTransfer == 18) { t = Transfer::Hlg; }
+        if (p != Primaries::Unspecified && t != Transfer::Unspecified) { return ColorSpace.make(primaries: p, transfer: t); }
+    }
+    if (c.hasIcc) { return ColorSpace.make(primaries: Primaries::IccProfile, transfer: Transfer::IccProfile); }
+    if (c.hasSrgb) { return ColorSpace.srgb(); }
+    ColorSpace s = ColorSpace.unspecified();
+    if (c.hasGamma) {
+        s.transfer = c.gamma == 100000 ? Transfer::Linear : Transfer::Gamma;
+        s.gamma = cast<uint32>(c.gamma);
+    }
+    if (c.hasChrm) {
+        s.chromaticities = c.chrm;
+        if (near(c: c.chrm, wx: 31270, wy: 32900, rx: 64000, ry: 33000, gx: 30000, gy: 60000, bx: 15000, by: 6000)) { s.primaries = Primaries::Bt709; }
+        else if (near(c: c.chrm, wx: 31270, wy: 32900, rx: 68000, ry: 32000, gx: 26500, gy: 69000, bx: 15000, by: 6000)) { s.primaries = Primaries::DisplayP3; }
+        else if (near(c: c.chrm, wx: 31270, wy: 32900, rx: 70800, ry: 29200, gx: 17000, gy: 79700, bx: 13100, by: 4600)) { s.primaries = Primaries::Bt2020; }
+        else { s.primaries = Primaries::Custom; }
+    }
+    return s;
 }
 
 // Reconstructs the image from its inflated rows into `out8` or `out16`: -1 when it decodes, else the byte of `raw` it
@@ -258,6 +390,17 @@ fn Result<Image, ImageError> decode(ConstView<uint8> bytes, const ref DecodeOpti
     bool dataStarted = false;
     bool dataEnded = false;
     bool seenTrns = false;
+    bool seenCicp = false;
+    bool seenIcc = false;
+    bool seenSrgb = false;
+    bool seenGama = false;
+    bool seenChrm = false;
+    bool seenMdcv = false;
+    bool seenClli = false;
+    bool seenExif = false;
+    DynamicArray<uint8> icc = DynamicArray.empty();
+    string iccName = "";
+    DynamicArray<uint8> exif = DynamicArray.empty();
     int64 ancillary = 0;
     FixedArray<uint8> palette = FixedArray.make(size: 768);
     FixedArray<uint8> alphas = FixedArray.make(size: 256);
@@ -326,7 +469,76 @@ fn Result<Image, ImageError> decode(ConstView<uint8> bytes, const ref DecodeOpti
         } else {
             ancillary = ancillary + 1;
             if (ancillary > options.limits.maxAncillaryChunks) { return refuse(kind: ImageErrorKind::Limit, at: start, chunk: kind); }
-            // An ancillary chunk that is broken, repeated or out of place is dropped, as libpng drops it.
+            // An ancillary chunk that is broken, repeated or out of place is dropped, as libpng drops it. The colour chunks
+            // come before PLTE and IDAT; eXIf anywhere after IHDR, as libpng takes it.
+            bool early = !c.hasPalette && !dataStarted;
+            if (crcGood && kind == CICP && !seenCicp) {
+                seenCicp = true;
+                if (early && len == 4) {
+                    c.hasCicp = true;
+                    c.cicpPrimaries = cast<int32>(bytes[d]);
+                    c.cicpTransfer = cast<int32>(bytes[d + 1]);
+                    c.cicpMatrix = cast<int32>(bytes[d + 2]);
+                    c.cicpRange = cast<int32>(bytes[d + 3]);
+                }
+            } else if (crcGood && kind == ICCP && !seenIcc) {
+                seenIcc = true;
+                if (early) {
+                    // The inflated profile is held to maxChunkBytes, as every chunk is, and to what the decode may still
+                    // allocate: past either, the file is refused. A profile that is malformed is dropped.
+                    int64 most = left < options.limits.maxChunkBytes ? left : options.limits.maxChunkBytes;
+                    bool tooLarge = false;
+                    icc = iccOf(data: bytes.slice(from: d, count: len), colourType: h.colourType, most: most, name: ref iccName, tooLarge: ref tooLarge);
+                    if (tooLarge) { return refuse(kind: ImageErrorKind::Limit, at: start, chunk: kind); }
+                    if (icc.length() > 0 && take(left: ref left, amount: cast<int64>(icc.length()))) { c.hasIcc = true; }
+                    else { icc = DynamicArray.empty(); iccName = ""; }
+                }
+            } else if (crcGood && kind == SRGB && !seenSrgb) {
+                seenSrgb = true;
+                if (early && len == 1 && bytes[d] <= 3) { c.hasSrgb = true; c.intent = cast<int32>(bytes[d]); }
+            } else if (crcGood && kind == GAMA && !seenGama) {
+                seenGama = true;
+                uint32 g = len == 4 ? be32(b: bytes, at: d) : 0ui32;
+                if (early && len == 4 && g >= 1 && g <= 0x7fffffffui32) { c.hasGamma = true; c.gamma = cast<int64>(g); }
+            } else if (crcGood && kind == CHRM && !seenChrm) {
+                seenChrm = true;
+                if (early && len == 32) {
+                    bool fits = true;
+                    for (isize i = 0; i < 8; i = i + 1) { if (be32(b: bytes, at: d + i * 4) > 0x7fffffffui32) { fits = false; } }
+                    if (fits) {
+                        c.hasChrm = true;
+                        c.chrm = Chromaticities.make(whiteX: cast<int32>(be32(b: bytes, at: d)), whiteY: cast<int32>(be32(b: bytes, at: d + 4)),
+                            redX: cast<int32>(be32(b: bytes, at: d + 8)), redY: cast<int32>(be32(b: bytes, at: d + 12)),
+                            greenX: cast<int32>(be32(b: bytes, at: d + 16)), greenY: cast<int32>(be32(b: bytes, at: d + 20)),
+                            blueX: cast<int32>(be32(b: bytes, at: d + 24)), blueY: cast<int32>(be32(b: bytes, at: d + 28)));
+                    }
+                }
+            } else if (crcGood && kind == MDCV && !seenMdcv) {
+                seenMdcv = true;
+                if (early && len == 24) {
+                    c.hasMdcv = true;
+                    c.mdcv.redX = be16(b: bytes, at: d); c.mdcv.redY = be16(b: bytes, at: d + 2);
+                    c.mdcv.greenX = be16(b: bytes, at: d + 4); c.mdcv.greenY = be16(b: bytes, at: d + 6);
+                    c.mdcv.blueX = be16(b: bytes, at: d + 8); c.mdcv.blueY = be16(b: bytes, at: d + 10);
+                    c.mdcv.whiteX = be16(b: bytes, at: d + 12); c.mdcv.whiteY = be16(b: bytes, at: d + 14);
+                    c.mdcv.maxLuminance = be32(b: bytes, at: d + 16);
+                    c.mdcv.minLuminance = be32(b: bytes, at: d + 20);
+                }
+            } else if (crcGood && kind == CLLI && !seenClli) {
+                seenClli = true;
+                if (early && len == 8) {
+                    c.hasClli = true;
+                    c.clli = ContentLight.make(maxCll: be32(b: bytes, at: d), maxFall: be32(b: bytes, at: d + 4));
+                }
+            } else if (crcGood && kind == EXIF && !seenExif) {
+                seenExif = true;
+                uint32 head = len >= 4 ? be32(b: bytes, at: d) : 0ui32;
+                if (head == 0x49492A00ui32 || head == 0x4D4D002Aui32) {
+                    if (!take(left: ref left, amount: cast<int64>(len))) { return refuse(kind: ImageErrorKind::Limit, at: start, chunk: kind); }
+                    c.hasExif = true;
+                    exif.addAll(items: bytes.slice(from: d, count: len));
+                }
+            }
             if (kind == TRNS && crcGood && !seenTrns && !dataStarted) {
                 seenTrns = true;
                 if (h.colourType == 3 && c.hasPalette && len >= 1 && len <= c.paletteEntries) {
@@ -392,8 +604,52 @@ fn Result<Image, ImageError> decode(ConstView<uint8> bytes, const ref DecodeOpti
     AlphaMode alpha = straight ? AlphaMode::Straight : AlphaMode::Opaque;
     isize w = cast<isize>(h.width);
     isize ht = cast<isize>(h.height);
+    ColorSpace space = spaceOf(c: c);
+    Result<Image, ImageError> made = Result::Err(error: ImageError.make(kind: ImageErrorKind::Samples, at: -1, chunk: 0));
     if (h.depth == 16) {
-        return Image.fromSamples16(width: w, height: ht, format: PixelFormat::Rgba16Unorm, alpha: alpha, colorSpace: ColorSpace.unspecified(), samples: give out16);
+        made = Image.fromSamples16(width: w, height: ht, format: PixelFormat::Rgba16Unorm, alpha: alpha, colorSpace: space, samples: give out16);
+        dropSamples8(samples: give out8);
+    } else {
+        made = Image.fromSamples8(width: w, height: ht, format: PixelFormat::Rgba8Unorm, alpha: alpha, colorSpace: space, samples: give out8);
+        dropSamples16(samples: give out16);
     }
-    return Image.fromSamples8(width: w, height: ht, format: PixelFormat::Rgba8Unorm, alpha: alpha, colorSpace: ColorSpace.unspecified(), samples: give out8);
+    return attach(made: give made, c: c, iccName: give iccName, icc: give icc, exif: give exif);
+}
+
+fn void dropSamples8(FixedArray<uint8> samples) { }
+fn void dropSamples16(FixedArray<uint16> samples) { }
+fn void dropBytes(DynamicArray<uint8> bytes) { }
+fn void dropText(string text) { }
+
+// The image, with what the chunks gave besides its samples and colour space.
+fn Result<Image, ImageError> attach(Result<Image, ImageError> made, const ref Chunks c, string iccName, DynamicArray<uint8> icc,
+                                   DynamicArray<uint8> exif) {
+    return match (give made) {
+        case Err(error: e): {
+            dropText(text: give iccName);
+            dropBytes(bytes: give icc);
+            dropBytes(bytes: give exif);
+            := Result::Err(error: e);
+        }
+        case Ok(value: built): {
+            Image img = give built;
+            if (c.hasIcc) { img.setIccProfile(name: give iccName, profile: give icc); }
+            else { dropText(text: give iccName); dropBytes(bytes: give icc); }
+            if (c.hasExif) { img.setExif(exif: give exif); } else { dropBytes(bytes: give exif); }
+            if (c.hasSrgb) {
+                RenderingIntent ri = RenderingIntent::Perceptual;
+                if (c.intent == 1) { ri = RenderingIntent::RelativeColorimetric; }
+                if (c.intent == 2) { ri = RenderingIntent::Saturation; }
+                if (c.intent == 3) { ri = RenderingIntent::AbsoluteColorimetric; }
+                img.setRenderingIntent(intent: ri);
+            }
+            if (c.hasCicp) {
+                img.setCicp(codes: Cicp.make(primaries: truncate<uint8>(c.cicpPrimaries), transfer: truncate<uint8>(c.cicpTransfer),
+                                             matrix: truncate<uint8>(c.cicpMatrix), fullRange: c.cicpRange == 1));
+            }
+            if (c.hasMdcv) { img.setMasteringDisplay(display: c.mdcv); }
+            if (c.hasClli) { img.setContentLight(levels: c.clli); }
+            := Result::Ok(value: give img);
+        }
+    };
 }

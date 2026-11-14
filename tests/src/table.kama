@@ -1,6 +1,7 @@
 // What each fixture should decode to, filled by expected.kama (generated from libpng by tools/reference/run.sh).
 
-import { std::collections::DynamicArray, image::PixelFormat, image::AlphaMode, image::ImageErrorKind };
+import { std::collections::DynamicArray, image::PixelFormat, image::AlphaMode, image::ImageErrorKind, image::Primaries,
+         image::Transfer };
 
 export { Table };
 
@@ -13,6 +14,21 @@ type resource Table {
     DynamicArray<AlphaMode> alphas;
     DynamicArray<uint32> crcs;
     DynamicArray<ImageErrorKind> kinds;
+    // a decoded fixture's colour row, the one `colour` gives it
+    DynamicArray<Primaries> primaries;
+    DynamicArray<Transfer> transfers;
+    DynamicArray<int64> gammas;
+    DynamicArray<int64> chromaticities;   // 8 a row: white, red, green, blue; x then y
+    DynamicArray<int32> intents;
+    DynamicArray<isize> iccLengths;
+    DynamicArray<uint32> iccCrcs;
+    DynamicArray<isize> exifLengths;
+    DynamicArray<uint32> exifCrcs;
+    DynamicArray<int64> cicps;
+    DynamicArray<uint32> mdcvCrcs;
+    DynamicArray<int64> maxClls;
+    DynamicArray<int64> maxFalls;
+    DynamicArray<bool> coloured;
 
     public ctor make() {
         this.names = DynamicArray.empty();
@@ -23,29 +39,79 @@ type resource Table {
         this.alphas = DynamicArray.empty();
         this.crcs = DynamicArray.empty();
         this.kinds = DynamicArray.empty();
+        this.primaries = DynamicArray.empty();
+        this.transfers = DynamicArray.empty();
+        this.gammas = DynamicArray.empty();
+        this.chromaticities = DynamicArray.empty();
+        this.intents = DynamicArray.empty();
+        this.iccLengths = DynamicArray.empty();
+        this.iccCrcs = DynamicArray.empty();
+        this.exifLengths = DynamicArray.empty();
+        this.exifCrcs = DynamicArray.empty();
+        this.cicps = DynamicArray.empty();
+        this.mdcvCrcs = DynamicArray.empty();
+        this.maxClls = DynamicArray.empty();
+        this.maxFalls = DynamicArray.empty();
+        this.coloured = DynamicArray.empty();
     }
 
-    // A fixture libpng decodes: its size, format, alpha, and the CRC-32 of its samples as `Image.bytes()` gives them.
-    public fn void decoded(string name, isize width, isize height, PixelFormat format, AlphaMode alpha, uint32 crc) {
+    fn void row(string name, bool decodes, isize width, isize height, PixelFormat format, AlphaMode alpha, uint32 crc,
+                ImageErrorKind kind) {
         this.names.add(item: give name);
-        this.decodes.add(item: true);
+        this.decodes.add(item: decodes);
         this.widths.add(item: width);
         this.heights.add(item: height);
         this.formats.add(item: format);
         this.alphas.add(item: alpha);
         this.crcs.add(item: crc);
-        this.kinds.add(item: ImageErrorKind::Unsupported);
+        this.kinds.add(item: kind);
+        this.primaries.add(item: Primaries::Unspecified);
+        this.transfers.add(item: Transfer::Unspecified);
+        this.gammas.add(item: 0);
+        for (int32 i = 0; i < 8; i = i + 1) { this.chromaticities.add(item: 0); }
+        this.intents.add(item: -1);
+        this.iccLengths.add(item: 0);
+        this.iccCrcs.add(item: 0);
+        this.exifLengths.add(item: 0);
+        this.exifCrcs.add(item: 0);
+        this.cicps.add(item: -1);
+        this.mdcvCrcs.add(item: 0);
+        this.maxClls.add(item: -1);
+        this.maxFalls.add(item: -1);
+        this.coloured.add(item: false);
+    }
+
+    // A fixture libpng decodes: its size, format, alpha, and the CRC-32 of its samples as `Image.bytes()` gives them.
+    public fn void decoded(string name, isize width, isize height, PixelFormat format, AlphaMode alpha, uint32 crc) {
+        this.row(name: give name, decodes: true, width: width, height: height, format: format, alpha: alpha, crc: crc,
+                 kind: ImageErrorKind::Unsupported);
     }
     // A fixture libpng refuses, and the kind of error its words name.
     public fn void refused(string name, ImageErrorKind kind) {
-        this.names.add(item: give name);
-        this.decodes.add(item: false);
-        this.widths.add(item: 0);
-        this.heights.add(item: 0);
-        this.formats.add(item: PixelFormat::Rgba8Unorm);
-        this.alphas.add(item: AlphaMode::Opaque);
-        this.crcs.add(item: 0);
-        this.kinds.add(item: kind);
+        this.row(name: give name, decodes: false, width: 0, height: 0, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque,
+                 crc: 0, kind: kind);
+    }
+    // The last decoded fixture's colour: what libpng keeps of its colour chunks, and the colour space they give. A
+    // length of 0 is no chunk, and -1 no value.
+    public fn void colour(string name, Primaries primaries, Transfer transfer, int64 gamma, InlineArray<int64>#(8) chromaticities,
+                          int32 intent, isize iccLength, uint32 iccCrc, isize exifLength, uint32 exifCrc, int64 cicp,
+                          uint32 mdcvCrc, int64 maxCll, int64 maxFall) {
+        isize i = this.names.length() - 1;
+        if (i < 0 || this.names[i] != name) { return; }
+        this.primaries[i] = primaries;
+        this.transfers[i] = transfer;
+        this.gammas[i] = gamma;
+        for (isize k = 0; k < 8; k = k + 1) { this.chromaticities[i * 8 + k] = chromaticities[k]; }
+        this.intents[i] = intent;
+        this.iccLengths[i] = iccLength;
+        this.iccCrcs[i] = iccCrc;
+        this.exifLengths[i] = exifLength;
+        this.exifCrcs[i] = exifCrc;
+        this.cicps[i] = cicp;
+        this.mdcvCrcs[i] = mdcvCrc;
+        this.maxClls[i] = maxCll;
+        this.maxFalls[i] = maxFall;
+        this.coloured[i] = true;
     }
 
     public const fn isize count() { return this.names.length(); }
@@ -57,4 +123,18 @@ type resource Table {
     public const fn AlphaMode alphaAt(isize at) { return this.alphas[at]; }
     public const fn uint32 crcAt(isize at) { return this.crcs[at]; }
     public const fn ImageErrorKind kindAt(isize at) { return this.kinds[at]; }
+    public const fn bool colouredAt(isize at) { return this.coloured[at]; }
+    public const fn Primaries primariesAt(isize at) { return this.primaries[at]; }
+    public const fn Transfer transferAt(isize at) { return this.transfers[at]; }
+    public const fn int64 gammaAt(isize at) { return this.gammas[at]; }
+    public const fn int64 chromaticityAt(isize at, isize k) { return this.chromaticities[at * 8 + k]; }
+    public const fn int32 intentAt(isize at) { return this.intents[at]; }
+    public const fn isize iccLengthAt(isize at) { return this.iccLengths[at]; }
+    public const fn uint32 iccCrcAt(isize at) { return this.iccCrcs[at]; }
+    public const fn isize exifLengthAt(isize at) { return this.exifLengths[at]; }
+    public const fn uint32 exifCrcAt(isize at) { return this.exifCrcs[at]; }
+    public const fn int64 cicpAt(isize at) { return this.cicps[at]; }
+    public const fn uint32 mdcvCrcAt(isize at) { return this.mdcvCrcs[at]; }
+    public const fn int64 maxCllAt(isize at) { return this.maxClls[at]; }
+    public const fn int64 maxFallAt(isize at) { return this.maxFalls[at]; }
 }

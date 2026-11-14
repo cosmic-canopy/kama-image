@@ -7,9 +7,10 @@
 //   borrow img.bytes() as b { queue.writeTexture(…, data: b); }     // every format, as bytes
 //   borrow img.samples16() as s { uint16 first = s[0]; }            // a 16-bit format's samples, typed
 
-import { std::collections::FixedArray, std::collections::ConstView, ImageError, ImageErrorKind, ColorSpace };
+import { std::collections::FixedArray, std::collections::DynamicArray, std::collections::ConstView, ImageError, ImageErrorKind,
+         ColorSpace, RenderingIntent, Cicp, MasteringDisplay, ContentLight };
 
-export { Image, PixelFormat, AlphaMode, Samples8, Samples16, SamplesF32 };
+export { Image, PixelFormat, AlphaMode, Samples8, Samples16, SamplesF32, IccProfileBytes, ExifBytes };
 
 // The formats an image holds, each named as the WebGPU texture format it uploads to.
 @nonExhaustive
@@ -45,6 +46,9 @@ type enum AlphaMode { Opaque, Straight, Premultiplied }
 @viewable type contract Samples8 for resource { const fn ConstView<uint8> samples8(); }
 @viewable type contract Samples16 for resource { const fn ConstView<uint16> samples16(); }
 @viewable type contract SamplesF32 for resource { const fn ConstView<float32> samplesF32(); }
+// The embedded ICC profile and the Exif data, as the file holds them; each empty when the file has none.
+@viewable type contract IccProfileBytes for resource { const fn ConstView<uint8> iccProfile(); }
+@viewable type contract ExifBytes for resource { const fn ConstView<uint8> exif(); }
 
 // Whether `n` samples are exactly `width` × `height` × `channels`, without a product that could overflow.
 fn bool fits(isize width, isize height, isize channels, isize n) {
@@ -55,7 +59,7 @@ fn bool fits(isize width, isize height, isize channels, isize n) {
     return pixels * channels == n;
 }
 
-type resource Image implements BytesViewable<ConstView<uint8>>, Samples8, Samples16, SamplesF32 {
+type resource Image implements BytesViewable<ConstView<uint8>>, Samples8, Samples16, SamplesF32, IccProfileBytes, ExifBytes {
     isize w;
     isize h;
     PixelFormat fmt;
@@ -64,6 +68,13 @@ type resource Image implements BytesViewable<ConstView<uint8>>, Samples8, Sample
     FixedArray<uint8> s8;
     FixedArray<uint16> s16;
     FixedArray<float32> s32;
+    DynamicArray<uint8> icc;
+    string iccName;
+    DynamicArray<uint8> exifData;
+    Optional<RenderingIntent> intent;
+    Optional<Cicp> cicpCodes;
+    Optional<MasteringDisplay> mastering;
+    Optional<ContentLight> light;
 
     ctor make(isize width, isize height, PixelFormat format, AlphaMode alpha, ColorSpace colorSpace) {
         this.w = width;
@@ -74,6 +85,13 @@ type resource Image implements BytesViewable<ConstView<uint8>>, Samples8, Sample
         this.s8 = FixedArray.make(size: 0);
         this.s16 = FixedArray.make(size: 0);
         this.s32 = FixedArray.make(size: 0);
+        this.icc = DynamicArray.empty();
+        this.iccName = "";
+        this.exifData = DynamicArray.empty();
+        this.intent = Optional::None;
+        this.cicpCodes = Optional::None;
+        this.mastering = Optional::None;
+        this.light = Optional::None;
     }
 
     // An image of 8-bit samples (`R8Unorm`, `Rg8Unorm`, `Rgba8Unorm`), row by row from the top, `samples` holding
@@ -113,6 +131,21 @@ type resource Image implements BytesViewable<ConstView<uint8>>, Samples8, Sample
     public const fn PixelFormat format() { return this.fmt; }
     public const fn AlphaMode alpha() { return this.alphaMode; }
     public const fn ColorSpace colorSpace() { return this.space; }
+    // The ICC profile's name (1 to 79 Latin-1 characters in a PNG), "" when there is none.
+    public const fn string iccProfileName() { return copy this.iccName; }
+    public const fn Optional<RenderingIntent> renderingIntent() { return this.intent; }
+    public const fn Optional<Cicp> cicp() { return this.cicpCodes; }
+    public const fn Optional<MasteringDisplay> masteringDisplay() { return this.mastering; }
+    public const fn Optional<ContentLight> contentLight() { return this.light; }
+
+    // What a decoder found, or an encoder is to write, besides the samples. Nothing here changes the samples.
+    public fn void setColorSpace(ColorSpace space) { this.space = space; }
+    public fn void setIccProfile(string name, DynamicArray<uint8> profile) { this.iccName = give name; this.icc = give profile; }
+    public fn void setExif(DynamicArray<uint8> exif) { this.exifData = give exif; }
+    public fn void setRenderingIntent(RenderingIntent intent) { this.intent = Optional::Some(value: intent); }
+    public fn void setCicp(Cicp codes) { this.cicpCodes = Optional::Some(value: codes); }
+    public fn void setMasteringDisplay(MasteringDisplay display) { this.mastering = Optional::Some(value: display); }
+    public fn void setContentLight(ContentLight levels) { this.light = Optional::Some(value: levels); }
 
     // Every sample as bytes, in the host's order: what a texture upload takes.
     public const fn ConstView<uint8> bytes() {
@@ -123,4 +156,6 @@ type resource Image implements BytesViewable<ConstView<uint8>>, Samples8, Sample
     public const fn ConstView<uint8> samples8() { return this.s8.view(); }
     public const fn ConstView<uint16> samples16() { return this.s16.view(); }
     public const fn ConstView<float32> samplesF32() { return this.s32.view(); }
+    public const fn ConstView<uint8> iccProfile() { return this.icc.view(); }
+    public const fn ConstView<uint8> exif() { return this.exifData.view(); }
 }

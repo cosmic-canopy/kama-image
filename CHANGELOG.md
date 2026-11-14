@@ -15,6 +15,10 @@ package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   chunks a file may hold.
 - `image::png::decode`: every colour type and bit depth, palettes, `tRNS` and Adam7 interlacing, strict, held to
   libpng's pixels on PngSuite and crafted cases.
+- The colour chunks: `ColorSpace` by the PNG Third Edition's precedence (cICP, iCCP, sRGB, then gAMA and cHRM), with
+  `Gamma`, `Custom` and `IccProfile`, the gamma and the chromaticities; and kept on the image, the ICC profile and its
+  name, Exif data, the rendering intent, the cICP code points, the mastering display (`MasteringDisplay`) and the content
+  light levels (`ContentLight`).
 
 ### Notes
 
