@@ -10,22 +10,27 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "basi0g01.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "basi0g01.png", format: PixelFormat::R8Unorm, crc: 1916321797ui32);
     t.decoded(name: "basi0g02.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 775938693ui32);
     t.colour(name: "basi0g02.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "basi0g02.png", format: PixelFormat::R8Unorm, crc: 1959377845ui32);
     t.decoded(name: "basi0g04.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 2366596123ui32);
     t.colour(name: "basi0g04.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "basi0g04.png", format: PixelFormat::R8Unorm, crc: 57892328ui32);
     t.decoded(name: "basi0g08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 3281348668ui32);
     t.colour(name: "basi0g08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "basi0g08.png", format: PixelFormat::R8Unorm, crc: 2018200142ui32);
     t.decoded(name: "basi0g16.png", width: 32, height: 32, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Opaque, crc: 2849681855ui32);
     t.colour(name: "basi0g16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "basi0g16.png", format: PixelFormat::R16Unorm, crc: 716263731ui32);
     t.decoded(name: "basi2c08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 800407606ui32);
     t.colour(name: "basi2c08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -54,10 +59,12 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "basi4a08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "basi4a08.png", format: PixelFormat::Rg8Unorm, crc: 2960547948ui32);
     t.decoded(name: "basi4a16.png", width: 32, height: 32, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Straight, crc: 805364572ui32);
     t.colour(name: "basi4a16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "basi4a16.png", format: PixelFormat::Rg16Unorm, crc: 1310642363ui32);
     t.decoded(name: "basi6a08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Straight, crc: 2806903596ui32);
     t.colour(name: "basi6a08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -70,22 +77,27 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "basn0g01.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "basn0g01.png", format: PixelFormat::R8Unorm, crc: 1916321797ui32);
     t.decoded(name: "basn0g02.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 775938693ui32);
     t.colour(name: "basn0g02.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "basn0g02.png", format: PixelFormat::R8Unorm, crc: 1959377845ui32);
     t.decoded(name: "basn0g04.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 2366596123ui32);
     t.colour(name: "basn0g04.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "basn0g04.png", format: PixelFormat::R8Unorm, crc: 57892328ui32);
     t.decoded(name: "basn0g08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 3281348668ui32);
     t.colour(name: "basn0g08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "basn0g08.png", format: PixelFormat::R8Unorm, crc: 2018200142ui32);
     t.decoded(name: "basn0g16.png", width: 32, height: 32, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Opaque, crc: 2849681855ui32);
     t.colour(name: "basn0g16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "basn0g16.png", format: PixelFormat::R16Unorm, crc: 716263731ui32);
     t.decoded(name: "basn2c08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 800407606ui32);
     t.colour(name: "basn2c08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -114,10 +126,12 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "basn4a08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "basn4a08.png", format: PixelFormat::Rg8Unorm, crc: 2960547948ui32);
     t.decoded(name: "basn4a16.png", width: 32, height: 32, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Straight, crc: 805364572ui32);
     t.colour(name: "basn4a16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "basn4a16.png", format: PixelFormat::Rg16Unorm, crc: 1310642363ui32);
     t.decoded(name: "basn6a08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Straight, crc: 2806903596ui32);
     t.colour(name: "basn6a08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -130,10 +144,12 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "bgai4a08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "bgai4a08.png", format: PixelFormat::Rg8Unorm, crc: 2960547948ui32);
     t.decoded(name: "bgai4a16.png", width: 32, height: 32, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Straight, crc: 805364572ui32);
     t.colour(name: "bgai4a16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "bgai4a16.png", format: PixelFormat::Rg16Unorm, crc: 1310642363ui32);
     t.decoded(name: "bgan6a08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Straight, crc: 2806903596ui32);
     t.colour(name: "bgan6a08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -146,10 +162,12 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "bgbn4a08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "bgbn4a08.png", format: PixelFormat::Rg8Unorm, crc: 2960547948ui32);
     t.decoded(name: "bggn4a16.png", width: 32, height: 32, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Straight, crc: 805364572ui32);
     t.colour(name: "bggn4a16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "bggn4a16.png", format: PixelFormat::Rg16Unorm, crc: 1310642363ui32);
     t.decoded(name: "bgwn6a08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Straight, crc: 2806903596ui32);
     t.colour(name: "bgwn6a08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -194,14 +212,17 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "cm0n0g04.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "cm0n0g04.png", format: PixelFormat::R8Unorm, crc: 174456296ui32);
     t.decoded(name: "cm7n0g04.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 3074681988ui32);
     t.colour(name: "cm7n0g04.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "cm7n0g04.png", format: PixelFormat::R8Unorm, crc: 174456296ui32);
     t.decoded(name: "cm9n0g04.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 3074681988ui32);
     t.colour(name: "cm9n0g04.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "cm9n0g04.png", format: PixelFormat::R8Unorm, crc: 174456296ui32);
     t.decoded(name: "cs3n2c16.png", width: 32, height: 32, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Opaque, crc: 1031759235ui32);
     t.colour(name: "cs3n2c16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -230,34 +251,42 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "ct0n0g04.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "ct0n0g04.png", format: PixelFormat::R8Unorm, crc: 174456296ui32);
     t.decoded(name: "ct1n0g04.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 3074681988ui32);
     t.colour(name: "ct1n0g04.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "ct1n0g04.png", format: PixelFormat::R8Unorm, crc: 174456296ui32);
     t.decoded(name: "cten0g04.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 2009322718ui32);
     t.colour(name: "cten0g04.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "cten0g04.png", format: PixelFormat::R8Unorm, crc: 265059633ui32);
     t.decoded(name: "ctfn0g04.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 4211329078ui32);
     t.colour(name: "ctfn0g04.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "ctfn0g04.png", format: PixelFormat::R8Unorm, crc: 3557081592ui32);
     t.decoded(name: "ctgn0g04.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 345367617ui32);
     t.colour(name: "ctgn0g04.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "ctgn0g04.png", format: PixelFormat::R8Unorm, crc: 1657879240ui32);
     t.decoded(name: "cthn0g04.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 1797453018ui32);
     t.colour(name: "cthn0g04.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "cthn0g04.png", format: PixelFormat::R8Unorm, crc: 4002826722ui32);
     t.decoded(name: "ctjn0g04.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 2059556349ui32);
     t.colour(name: "ctjn0g04.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "ctjn0g04.png", format: PixelFormat::R8Unorm, crc: 3954987732ui32);
     t.decoded(name: "ctzn0g04.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 3074681988ui32);
     t.colour(name: "ctzn0g04.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "ctzn0g04.png", format: PixelFormat::R8Unorm, crc: 174456296ui32);
     t.decoded(name: "exif2c08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 2161709622ui32);
     t.colour(name: "exif2c08.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -266,6 +295,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "f00n0g08.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "f00n0g08.png", format: PixelFormat::R8Unorm, crc: 521676383ui32);
     t.decoded(name: "f00n2c08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 2597630091ui32);
     t.colour(name: "f00n2c08.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -274,6 +304,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "f01n0g08.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "f01n0g08.png", format: PixelFormat::R8Unorm, crc: 409477503ui32);
     t.decoded(name: "f01n2c08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 3810330354ui32);
     t.colour(name: "f01n2c08.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -282,6 +313,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "f02n0g08.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "f02n0g08.png", format: PixelFormat::R8Unorm, crc: 2042218974ui32);
     t.decoded(name: "f02n2c08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 3121433383ui32);
     t.colour(name: "f02n2c08.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -290,6 +322,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "f03n0g08.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "f03n0g08.png", format: PixelFormat::R8Unorm, crc: 2742273604ui32);
     t.decoded(name: "f03n2c08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 1831428469ui32);
     t.colour(name: "f03n2c08.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -298,6 +331,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "f04n0g08.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "f04n0g08.png", format: PixelFormat::R8Unorm, crc: 3087032872ui32);
     t.decoded(name: "f04n2c08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 3318004397ui32);
     t.colour(name: "f04n2c08.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -306,10 +340,12 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "f99n0g04.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "f99n0g04.png", format: PixelFormat::R8Unorm, crc: 1023394357ui32);
     t.decoded(name: "g03n0g16.png", width: 32, height: 32, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Opaque, crc: 1303266486ui32);
     t.colour(name: "g03n0g16.png", primaries: Primaries::Unspecified, transfer: Transfer::Gamma, gamma: 35000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "g03n0g16.png", format: PixelFormat::R16Unorm, crc: 473707466ui32);
     t.decoded(name: "g03n2c08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 4136119327ui32);
     t.colour(name: "g03n2c08.png", primaries: Primaries::Unspecified, transfer: Transfer::Gamma, gamma: 35000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -322,6 +358,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "g04n0g16.png", primaries: Primaries::Unspecified, transfer: Transfer::Gamma, gamma: 45000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "g04n0g16.png", format: PixelFormat::R16Unorm, crc: 1061496161ui32);
     t.decoded(name: "g04n2c08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 2461854947ui32);
     t.colour(name: "g04n2c08.png", primaries: Primaries::Unspecified, transfer: Transfer::Gamma, gamma: 45000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -334,6 +371,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "g05n0g16.png", primaries: Primaries::Unspecified, transfer: Transfer::Gamma, gamma: 55000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "g05n0g16.png", format: PixelFormat::R16Unorm, crc: 3735522154ui32);
     t.decoded(name: "g05n2c08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 1968032885ui32);
     t.colour(name: "g05n2c08.png", primaries: Primaries::Unspecified, transfer: Transfer::Gamma, gamma: 55000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -346,6 +384,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "g07n0g16.png", primaries: Primaries::Unspecified, transfer: Transfer::Gamma, gamma: 70000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "g07n0g16.png", format: PixelFormat::R16Unorm, crc: 528485053ui32);
     t.decoded(name: "g07n2c08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 810337521ui32);
     t.colour(name: "g07n2c08.png", primaries: Primaries::Unspecified, transfer: Transfer::Gamma, gamma: 70000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -358,6 +397,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "g10n0g16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "g10n0g16.png", format: PixelFormat::R16Unorm, crc: 3347570312ui32);
     t.decoded(name: "g10n2c08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 1844853900ui32);
     t.colour(name: "g10n2c08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -370,6 +410,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "g25n0g16.png", primaries: Primaries::Unspecified, transfer: Transfer::Gamma, gamma: 250000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "g25n0g16.png", format: PixelFormat::R16Unorm, crc: 1442058880ui32);
     t.decoded(name: "g25n2c08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 4092665921ui32);
     t.colour(name: "g25n2c08.png", primaries: Primaries::Unspecified, transfer: Transfer::Gamma, gamma: 250000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -382,6 +423,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "oi1n0g16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "oi1n0g16.png", format: PixelFormat::R16Unorm, crc: 716263731ui32);
     t.decoded(name: "oi1n2c16.png", width: 32, height: 32, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Opaque, crc: 176077542ui32);
     t.colour(name: "oi1n2c16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -390,6 +432,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "oi2n0g16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "oi2n0g16.png", format: PixelFormat::R16Unorm, crc: 716263731ui32);
     t.decoded(name: "oi2n2c16.png", width: 32, height: 32, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Opaque, crc: 176077542ui32);
     t.colour(name: "oi2n2c16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -398,6 +441,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "oi4n0g16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "oi4n0g16.png", format: PixelFormat::R16Unorm, crc: 716263731ui32);
     t.decoded(name: "oi4n2c16.png", width: 32, height: 32, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Opaque, crc: 176077542ui32);
     t.colour(name: "oi4n2c16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -406,6 +450,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "oi9n0g16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "oi9n0g16.png", format: PixelFormat::R16Unorm, crc: 716263731ui32);
     t.decoded(name: "oi9n2c16.png", width: 32, height: 32, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Opaque, crc: 176077542ui32);
     t.colour(name: "oi9n2c16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -426,6 +471,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "ps1n0g08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "ps1n0g08.png", format: PixelFormat::R8Unorm, crc: 2018200142ui32);
     t.decoded(name: "ps1n2c16.png", width: 32, height: 32, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Opaque, crc: 176077542ui32);
     t.colour(name: "ps1n2c16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -434,6 +480,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "ps2n0g08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "ps2n0g08.png", format: PixelFormat::R8Unorm, crc: 2018200142ui32);
     t.decoded(name: "ps2n2c16.png", width: 32, height: 32, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Opaque, crc: 176077542ui32);
     t.colour(name: "ps2n2c16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -586,6 +633,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "tbbn0g04.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "tbbn0g04.png", format: PixelFormat::Rg8Unorm, crc: 2375338924ui32);
     t.decoded(name: "tbbn2c16.png", width: 32, height: 32, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Straight, crc: 134119568ui32);
     t.colour(name: "tbbn2c16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -610,6 +658,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "tbwn0g16.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "tbwn0g16.png", format: PixelFormat::Rg16Unorm, crc: 3084055895ui32);
     t.decoded(name: "tbwn3p08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Straight, crc: 2639711591ui32);
     t.colour(name: "tbwn3p08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -626,6 +675,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "tp0n0g08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "tp0n0g08.png", format: PixelFormat::R8Unorm, crc: 3286082606ui32);
     t.decoded(name: "tp0n2c08.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 1738351796ui32);
     t.colour(name: "tp0n2c08.png", primaries: Primaries::Unspecified, transfer: Transfer::Linear, gamma: 100000,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -676,6 +726,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "h16g.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "h16g.png", format: PixelFormat::R16Unorm, crc: 3971768580ui32);
     t.decoded(name: "h8a.png", width: 256, height: 64, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Straight, crc: 3936905901ui32);
     t.colour(name: "h8a.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -725,6 +776,7 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "hc-icc-grey.png", primaries: Primaries::Unspecified, transfer: Transfer::Gamma, gamma: 45455,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "hc-icc-grey.png", format: PixelFormat::R8Unorm, crc: 465562987ui32);
     t.decoded(name: "hc-icc-srgb.png", width: 8, height: 8, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 4236399726ui32);
     t.colour(name: "hc-icc-srgb.png", primaries: Primaries::IccProfile, transfer: Transfer::IccProfile, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: 1,
@@ -757,10 +809,12 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "hkey4.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "hkey4.png", format: PixelFormat::Rg8Unorm, crc: 138423230ui32);
     t.decoded(name: "hkey8.png", width: 4, height: 4, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Straight, crc: 1890979981ui32);
     t.colour(name: "hkey8.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.grey(name: "hkey8.png", format: PixelFormat::Rg8Unorm, crc: 359384789ui32);
     t.decoded(name: "hkeyrgb.png", width: 4, height: 4, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Straight, crc: 3285576420ui32);
     t.colour(name: "hkeyrgb.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,

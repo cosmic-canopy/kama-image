@@ -300,7 +300,8 @@ fn ColorSpace spaceOf(const ref Chunks c) {
 // Reconstructs the image from its inflated rows into `out8` or `out16`: -1 when it decodes, else the byte of `raw` it
 // stopped at, with `badFilter` saying whether a row named no filter or a pixel named a palette entry past its end.
 fn int64 reconstruct(ref FixedArray<uint8> raw, const ref Header h, const ref Chunks c, const ref FixedArray<uint8> palette,
-                     const ref FixedArray<uint8> alphas, ref FixedArray<uint8> out8, ref FixedArray<uint16> out16, ref bool badFilter) {
+                     const ref FixedArray<uint8> alphas, isize outChannels, ref FixedArray<uint8> out8, ref FixedArray<uint16> out16,
+                     ref bool badFilter) {
     isize off = 0;
     isize w = cast<isize>(h.width);
     isize step = cast<isize>(h.filterStep());
@@ -323,7 +324,7 @@ fn int64 reconstruct(ref FixedArray<uint8> raw, const ref Header h, const ref Ch
             unfilter(raw: ref raw, at: at, n: rb, step: step, prev: r > 0 ? at - rb - 1 : -1, kind: kind);
             isize y = ys + r * dy;
             for (isize x = 0; x < pw; x = x + 1) {
-                isize dst = ((y * w) + xs + x * dx) * 4;
+                isize dst = ((y * w) + xs + x * dx) * outChannels;
                 int32 rr = 0;
                 int32 gg = 0;
                 int32 bb = 0;
@@ -357,16 +358,23 @@ fn int64 reconstruct(ref FixedArray<uint8> raw, const ref Header h, const ref Ch
                     bb = sampleAt(raw: raw, at: at, i: x * 4 + 2, depth: h.depth);
                     aa = sampleAt(raw: raw, at: at, i: x * 4 + 3, depth: h.depth);
                 }
+                // four channels, or kept grey: grey alone, or grey and alpha
                 if (h.depth == 16) {
                     out16[dst] = truncate<uint16>(rr);
-                    out16[dst + 1] = truncate<uint16>(gg);
-                    out16[dst + 2] = truncate<uint16>(bb);
-                    out16[dst + 3] = truncate<uint16>(aa);
+                    if (outChannels == 2) { out16[dst + 1] = truncate<uint16>(aa); }
+                    if (outChannels == 4) {
+                        out16[dst + 1] = truncate<uint16>(gg);
+                        out16[dst + 2] = truncate<uint16>(bb);
+                        out16[dst + 3] = truncate<uint16>(aa);
+                    }
                 } else {
                     out8[dst] = truncate<uint8>(rr);
-                    out8[dst + 1] = truncate<uint8>(gg);
-                    out8[dst + 2] = truncate<uint8>(bb);
-                    out8[dst + 3] = truncate<uint8>(aa);
+                    if (outChannels == 2) { out8[dst + 1] = truncate<uint8>(aa); }
+                    if (outChannels == 4) {
+                        out8[dst + 1] = truncate<uint8>(gg);
+                        out8[dst + 2] = truncate<uint8>(bb);
+                        out8[dst + 3] = truncate<uint8>(aa);
+                    }
                 }
             }
             off = off + rb + 1;
@@ -562,7 +570,10 @@ fn Result<Image, ImageError> decode(ConstView<uint8> bytes, const ref DecodeOpti
     int64 need = filteredBytes(h: h, left: ref left);
     if (need < 0) { return refuse(kind: ImageErrorKind::Limit, at: c.firstData, chunk: IDAT); }
     Optional<isize> needSize = try cast<isize>(need);
-    Optional<isize> sampleCount = try cast<isize>(h.width * h.height * 4);
+    // four channels, or with keepGrey one for grey and two for grey with alpha (its own, or a tRNS key's)
+    bool grey = options.keepGrey && (h.colourType == 0 || h.colourType == 4);
+    isize outChannels = grey ? (h.colourType == 4 || c.hasKey ? 2 : 1) : 4;
+    Optional<isize> sampleCount = try cast<isize>(h.width * h.height * cast<int64>(outChannels));
     if (needSize.isNone() || sampleCount.isNone()) { return refuse(kind: ImageErrorKind::Limit, at: c.firstData, chunk: IDAT); }
     isize total = match (needSize) { case Some(value: v): v; case None: 0; };
     isize samples = match (sampleCount) { case Some(value: v): v; case None: 0; };
@@ -597,7 +608,8 @@ fn Result<Image, ImageError> decode(ConstView<uint8> bytes, const ref DecodeOpti
     FixedArray<uint8> out8 = FixedArray.make(size: h.depth == 16 ? 0 : samples);
     FixedArray<uint16> out16 = FixedArray.make(size: h.depth == 16 ? samples : 0);
     bool badFilter = false;
-    int64 bad = reconstruct(raw: ref raw, h: h, c: c, palette: palette, alphas: alphas, out8: ref out8, out16: ref out16, badFilter: ref badFilter);
+    int64 bad = reconstruct(raw: ref raw, h: h, c: c, palette: palette, alphas: alphas, outChannels: outChannels, out8: ref out8,
+                            out16: ref out16, badFilter: ref badFilter);
     if (bad >= 0) { return refuse(kind: badFilter ? ImageErrorKind::Data : ImageErrorKind::Palette, at: -1, chunk: IDAT); }
 
     bool straight = h.colourType == 4 || h.colourType == 6 || c.hasKey || c.alphaEntries > 0;
@@ -607,10 +619,12 @@ fn Result<Image, ImageError> decode(ConstView<uint8> bytes, const ref DecodeOpti
     ColorSpace space = spaceOf(c: c);
     Result<Image, ImageError> made = Result::Err(error: ImageError.make(kind: ImageErrorKind::Samples, at: -1, chunk: 0));
     if (h.depth == 16) {
-        made = Image.fromSamples16(width: w, height: ht, format: PixelFormat::Rgba16Unorm, alpha: alpha, colorSpace: space, samples: give out16);
+        PixelFormat f16 = outChannels == 1 ? PixelFormat::R16Unorm : outChannels == 2 ? PixelFormat::Rg16Unorm : PixelFormat::Rgba16Unorm;
+        made = Image.fromSamples16(width: w, height: ht, format: f16, alpha: alpha, colorSpace: space, samples: give out16);
         dropSamples8(samples: give out8);
     } else {
-        made = Image.fromSamples8(width: w, height: ht, format: PixelFormat::Rgba8Unorm, alpha: alpha, colorSpace: space, samples: give out8);
+        PixelFormat f8 = outChannels == 1 ? PixelFormat::R8Unorm : outChannels == 2 ? PixelFormat::Rg8Unorm : PixelFormat::Rgba8Unorm;
+        made = Image.fromSamples8(width: w, height: ht, format: f8, alpha: alpha, colorSpace: space, samples: give out8);
         dropSamples16(samples: give out16);
     }
     return attach(made: give made, c: c, iccName: give iccName, icc: give icc, exif: give exif);

@@ -87,7 +87,9 @@ byte's) and `chunk()` (the chunk's type as PNG stores it, 0 for none; `chunkCode
 
 ## Decode options
 
-`DecodeOptions.defaults()` holds `limits`, a `DecodeLimits`, whose public fields a caller raises or lowers:
+`DecodeOptions.defaults()` holds `keepGrey` (false) and `limits`, a `DecodeLimits`. With `keepGrey`, a grey image decodes to
+one channel (`R8Unorm`, `R16Unorm`), and grey with alpha, its own or a `tRNS` key's, to two (`Rg8Unorm`, `Rg16Unorm`), for
+height maps and masks; any other image decodes as without it. A caller raises or lowers each limit:
 
 | limit | default | what it bounds |
 |---|---|---|
@@ -102,7 +104,8 @@ byte's) and `chunk()` (the chunk's type as PNG stores it, 0 for none; `chunkCode
 - **Every colour type and bit depth** (grey at 1, 2, 4, 8 and 16 bits, RGB, palette at 1 to 8, grey with alpha, RGBA),
   palettes and `tRNS` (a palette's alphas, a grey or RGB key), and Adam7 interlacing.
 - **Expanded to four channels at the file's own depth:** `Rgba8Unorm` up to 8 bits (grey below 8 scaled as libpng
-  scales it), `Rgba16Unorm` at 16. `Straight` when the file has alpha or a `tRNS`, otherwise `Opaque`.
+  scales it), `Rgba16Unorm` at 16, or kept grey with `keepGrey`. `Straight` when the file has alpha or a `tRNS`,
+  otherwise `Opaque`.
 - **Refused:**
 
   | kind | when |
@@ -152,13 +155,15 @@ byte's) and `chunk()` (the chunk's type as PNG stores it, 0 for none; `chunkCode
 
 `tools/test.sh` is the gate: the roadmap's shape (`tools/check-roadmap.sh`), `kama check` on the package and its tests,
 then `tests/`, one program, built debug and release and run natively, and built for the web and run under node with its
-fixtures embedded. 259 cases on each leg:
+fixtures embedded. 446 cases on each leg:
 
 - **Every fixture held to libpng's answer:** PngSuite 2017jul19's 176 files (`tests/fixtures/pngsuite/`, with its
   licence) and 27 crafted cases (`tests/fixtures/crafted/`, written by `tools/reference/craft.mjs`):
   - each decoded one has the same size, format, alpha and samples (their CRC-32) as libpng 1.6.59 decodes it;
   - each also has what libpng keeps of its colour chunks (the profile and Exif data by CRC-32, the cICP code points,
     mDCV by CRC-32, cLLI), and the colour space they give by the precedence above;
+  - each is decoded again with `keepGrey`: a grey one has the format and samples libpng gives it without
+    `png_set_gray_to_rgb` (54 of them), and any other is unchanged;
   - each refused one has the kind of error libpng's words name.
 
   The expectations are `tests/src/expected.kama`, written on purpose by `tools/reference/run.sh` from

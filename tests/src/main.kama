@@ -183,6 +183,25 @@ fn void fixtures(ref Run run) {
         DynamicArray<uint8> file = match (give read) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
         Result<Image, ImageError> r = decode(bytes: file.view(), options: options);
         if (t.decodesAt(at: i)) {
+            // with keepGrey: a grey file as libpng keeps it grey, and any other just as without
+            DecodeOptions grey = DecodeOptions.defaults();
+            grey.keepGrey = true;
+            Result<Image, ImageError> g = decode(bytes: file.view(), options: grey);
+            match (give g) {
+                case Ok(value: img): {
+                    PixelFormat want = t.greyedAt(at: i) ? t.greyFormatAt(at: i) : t.formatAt(at: i);
+                    uint32 wantSum = t.greyedAt(at: i) ? t.greyCrcAt(at: i) : t.crcAt(at: i);
+                    uint32 sum = 0;
+                    borrow img.bytes() as b { sum = crc32(bytes: b); }
+                    if (img.format() != want) {
+                        string gotName = formatName(f: img.format());
+                        string wantName = formatName(f: want);
+                        run.fail(name: name, why: "with keepGrey, format ${gotName}, libpng ${wantName}");
+                    } else if (sum != wantSum) { run.fail(name: name, why: "with keepGrey, samples' CRC-32 ${sum}, libpng ${wantSum}"); }
+                    else { run.pass(); }
+                }
+                case Err(error: e): { string m = e.message(); run.fail(name: name, why: "with keepGrey, refused (${m})"); }
+            };
             match (give r) {
                 case Ok(value: img): {
                     string why = compare(img: img, t: t, i: i);

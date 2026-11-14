@@ -29,6 +29,10 @@ type resource Table {
     DynamicArray<int64> maxClls;
     DynamicArray<int64> maxFalls;
     DynamicArray<bool> coloured;
+    // a grey fixture decoded with keepGrey, the row `grey` gives it
+    DynamicArray<bool> greyed;
+    DynamicArray<PixelFormat> greyFormats;
+    DynamicArray<uint32> greyCrcs;
 
     public ctor make() {
         this.names = DynamicArray.empty();
@@ -53,6 +57,9 @@ type resource Table {
         this.maxClls = DynamicArray.empty();
         this.maxFalls = DynamicArray.empty();
         this.coloured = DynamicArray.empty();
+        this.greyed = DynamicArray.empty();
+        this.greyFormats = DynamicArray.empty();
+        this.greyCrcs = DynamicArray.empty();
     }
 
     fn void row(string name, bool decodes, isize width, isize height, PixelFormat format, AlphaMode alpha, uint32 crc,
@@ -79,6 +86,9 @@ type resource Table {
         this.maxClls.add(item: -1);
         this.maxFalls.add(item: -1);
         this.coloured.add(item: false);
+        this.greyed.add(item: false);
+        this.greyFormats.add(item: PixelFormat::R8Unorm);
+        this.greyCrcs.add(item: 0);
     }
 
     // A fixture libpng decodes: its size, format, alpha, and the CRC-32 of its samples as `Image.bytes()` gives them.
@@ -114,7 +124,19 @@ type resource Table {
         this.coloured[i] = true;
     }
 
+    // The last decoded fixture, a grey one, decoded with keepGrey: one channel, or two with alpha.
+    public fn void grey(string name, PixelFormat format, uint32 crc) {
+        isize i = this.names.length() - 1;
+        if (i < 0 || this.names[i] != name) { return; }
+        this.greyed[i] = true;
+        this.greyFormats[i] = format;
+        this.greyCrcs[i] = crc;
+    }
+
     public const fn isize count() { return this.names.length(); }
+    public const fn bool greyedAt(isize at) { return this.greyed[at]; }
+    public const fn PixelFormat greyFormatAt(isize at) { return this.greyFormats[at]; }
+    public const fn uint32 greyCrcAt(isize at) { return this.greyCrcs[at]; }
     public const fn string nameAt(isize at) { return copy this.names[at]; }
     public const fn bool decodesAt(isize at) { return this.decodes[at]; }
     public const fn isize widthAt(isize at) { return this.widths[at]; }

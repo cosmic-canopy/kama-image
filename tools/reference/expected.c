@@ -105,6 +105,35 @@ static void colour(png_structp p, png_infop info, const char *name) {
            has_exif ? (unsigned long)nexif : 0ul, has_exif ? crc_of(exif, nexif) : 0ul, cicp, mdcv, maxCll, maxFall);
 }
 
+/* A grey file decoded as the package's `keepGrey` option decodes it: grey as one channel, grey with alpha (its own, or a
+ * tRNS key's) as two, at the file's depth, low bit depths scaled to 8. */
+static void grey(const char *path) {
+    FILE *in = fopen(path, "rb");
+    png_structp p = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, on_error, on_warning);
+    png_infop info = png_create_info_struct(p);
+    unsigned char *pix = NULL;
+    png_bytepp rows = NULL;
+    if (setjmp(png_jmpbuf(p))) { fprintf(stderr, "%s: refused when kept grey\n", path); exit(1); }
+    png_init_io(p, in);
+    png_read_info(p, info);
+    png_uint_32 h = png_get_image_height(p, info);
+    png_set_expand(p);
+    png_set_interlace_handling(p);
+    png_read_update_info(p, info);
+    int depth = png_get_bit_depth(p, info), channels = png_get_channels(p, info);
+    size_t rowbytes = png_get_rowbytes(p, info), n = rowbytes * h;
+    pix = malloc(n);
+    rows = malloc(sizeof *rows * h);
+    for (png_uint_32 y = 0; y < h; y++) rows[y] = pix + rowbytes * y;
+    png_read_image(p, rows);
+    png_read_end(p, NULL);
+    if (depth == 16) for (size_t i = 0; i < n; i += 2) { unsigned char t = pix[i]; pix[i] = pix[i + 1]; pix[i + 1] = t; }
+    const char *format = channels == 1 ? (depth == 16 ? "R16Unorm" : "R8Unorm") : (depth == 16 ? "Rg16Unorm" : "Rg8Unorm");
+    printf("    t.grey(name: \"%s\", format: PixelFormat::%s, crc: %luui32);\n", base(path), format, crc32(0L, pix, (uInt)n));
+    png_destroy_read_struct(&p, &info, NULL);
+    free(rows); free(pix); fclose(in);
+}
+
 static int one(const char *path) {
     FILE *in = fopen(path, "rb");
     if (!in) { fprintf(stderr, "%s: cannot open\n", path); return 1; }
@@ -143,6 +172,7 @@ static int one(const char *path) {
     printf("    t.decoded(name: \"%s\", width: %u, height: %u, format: PixelFormat::%s, alpha: AlphaMode::%s, crc: %luui32);\n",
            base(path), (unsigned)w, (unsigned)h, depth == 16 ? "Rgba16Unorm" : "Rgba8Unorm", straight ? "Straight" : "Opaque", crc);
     colour(p, info, base(path));
+    if (ct == PNG_COLOR_TYPE_GRAY || ct == PNG_COLOR_TYPE_GRAY_ALPHA) grey(path);
     png_destroy_read_struct(&p, &info, NULL);
     free(rows); free(pix); fclose(in);
     return 0;

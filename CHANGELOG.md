@@ -19,6 +19,7 @@ package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Gamma`, `Custom` and `IccProfile`, the gamma and the chromaticities; and kept on the image, the ICC profile and its
   name, Exif data, the rendering intent, the cICP code points, the mastering display (`MasteringDisplay`) and the content
   light levels (`ContentLight`).
+- `DecodeOptions.keepGrey`: a grey PNG as one channel, or two with alpha.
 - The tests' sweep: every single-bit flip and every truncation of every fixture, in debug and in release.
 
 ### Notes

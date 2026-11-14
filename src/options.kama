@@ -17,6 +17,9 @@ type value DecodeLimits {
 
 type value DecodeOptions {
     public DecodeLimits limits = DecodeLimits.defaults();
+    // A grey image as one channel (`R8Unorm`, `R16Unorm`), and grey with alpha as two (`Rg8Unorm`, `Rg16Unorm`), for
+    // height maps and masks. Otherwise every image expands to four channels.
+    public bool keepGrey = false;
 
     public ctor defaults() { }
 }
