@@ -5,8 +5,9 @@ tested. What comes next is [ROADMAP.md](ROADMAP.md), the decided design and its 
 [AGENTS.image.md](AGENTS.image.md) § Decided, the evidence behind them is [RESEARCH.md](RESEARCH.md), and the history is
 the git log and [CHANGELOG.md](CHANGELOG.md).
 
-**Where it stands** (2026-11-14, kama 0.9.949): the `Image` type, and PNG decoding of every colour type and bit depth,
-palettes, `tRNS` and Adam7 interlacing, and the colour chunks, strict and within limits. Every PngSuite file and the
+**Where it stands** (2026-11-14, kama 0.9.949): the `Image` type with `convert(to:)`, and PNG decoding (IMG-1, built):
+every colour type and bit depth, palettes, `tRNS`, Adam7 interlacing, an APNG's default image and the colour chunks,
+strict and within limits, with `keepGrey` and `partial`. Every PngSuite file and the
 crafted cases are held to libpng's pixels and to what libpng keeps of their colour chunks, natively on Windows (debug
 and release) and on wasm under node. Not published.
 
@@ -60,7 +61,7 @@ samples row by row from the top, four channels interleaved where the format has 
 - **Built from samples:** `Image.fromSamples8`, `fromSamples16` and `fromSamplesF32(width:, height:, format:, alpha:,
   colorSpace:, samples:)` take a `FixedArray` of exactly width × height × channels samples of the format's type, and
   refuse anything else as `ImageErrorKind::Samples`.
-- **Read:** `width()`, `height()`, `format()`, `alpha()`, `colorSpace()`; and the windows `bytes()` (every sample in the
+- **Read:** `width()`, `height()`, `format()`, `alpha()`, `colorSpace()`, `isPartial()`; and the windows `bytes()` (every sample in the
   host's byte order, little-endian on every target kama builds for), `samples8()`, `samples16()` and `samplesF32()`,
   each empty unless the image holds samples of its type. Each window is a mint: `borrow img.bytes() as b { … }`.
 - **What a file says besides its pixels,** kept as it says it and never applied to the samples:
@@ -94,7 +95,11 @@ byte's) and `chunk()` (the chunk's type as PNG stores it, 0 for none; `chunkCode
 
 ## Decode options
 
-`DecodeOptions.defaults()` holds `keepGrey` (false) and `limits`, a `DecodeLimits`. With `keepGrey`, a grey image decodes to
+`DecodeOptions.defaults()` holds `keepGrey` and `partial` (both false) and `limits`, a `DecodeLimits`. With `partial`, a file
+that ends early, after its image data begins, gives the rows decoded before the cut, for a viewer: a cut image data
+chunk's bytes are kept unchecked, the stream's end and Adler-32 are not looked for, every whole row is reconstructed
+(pass by pass for Adam7), the rest of the image is 0, and `Image.isPartial()` says rows are missing. A cut before any
+image data, and image data that is corrupt or short in a whole file, are still refused. With `keepGrey`, a grey image decodes to
 one channel (`R8Unorm`, `R16Unorm`), and grey with alpha, its own or a `tRNS` key's, to two (`Rg8Unorm`, `Rg16Unorm`), for
 height maps and masks; any other image decodes as without it. A caller raises or lowers each limit:
 
@@ -109,7 +114,8 @@ height maps and masks; any other image decodes as without it. A caller raises or
 `image::png::decode(bytes:, options:) -> Result<Image, ImageError>`:
 
 - **Every colour type and bit depth** (grey at 1, 2, 4, 8 and 16 bits, RGB, palette at 1 to 8, grey with alpha, RGBA),
-  palettes and `tRNS` (a palette's alphas, a grey or RGB key), and Adam7 interlacing.
+  palettes and `tRNS` (a palette's alphas, a grey or RGB key), and Adam7 interlacing. An animated PNG decodes to its
+  default image: `acTL`, `fcTL` and `fdAT` are ancillary chunks this decoder leaves alone.
 - **Expanded to four channels at the file's own depth:** `Rgba8Unorm` up to 8 bits (grey below 8 scaled as libpng
   scales it), `Rgba16Unorm` at 16, or kept grey with `keepGrey`. `Straight` when the file has alpha or a `tRNS`,
   otherwise `Opaque`.
@@ -162,10 +168,10 @@ height maps and masks; any other image decodes as without it. A caller raises or
 
 `tools/test.sh` is the gate: the roadmap's shape (`tools/check-roadmap.sh`), `kama check` on the package and its tests,
 then `tests/`, one program, built debug and release and run natively, and built for the web and run under node with its
-fixtures embedded. 459 cases on each leg:
+fixtures embedded. 470 cases on each leg:
 
 - **Every fixture held to libpng's answer:** PngSuite 2017jul19's 176 files (`tests/fixtures/pngsuite/`, with its
-  licence) and 27 crafted cases (`tests/fixtures/crafted/`, written by `tools/reference/craft.mjs`):
+  licence) and 28 crafted cases (`tests/fixtures/crafted/`, written by `tools/reference/craft.mjs`):
   - each decoded one has the same size, format, alpha and samples (their CRC-32) as libpng 1.6.59 decodes it;
   - each also has what libpng keeps of its colour chunks (the profile and Exif data by CRC-32, the cICP code points,
     mDCV by CRC-32, cLLI), and the colour space they give by the precedence above;
@@ -189,9 +195,13 @@ fixtures embedded. 459 cases on each leg:
 - **`convert(to:)`** (`tests/src/convert.kama`): every 8-bit value to 16 bits and every 16-bit value to 8, half floats
   from known float32 values (a tie, the largest finite, infinity, the smallest subnormal) and back, clamping and NaN,
   each channel mapping, the refusals, and the metadata kept.
+- **`partial`** (`tests/src/partial.kama`, on files whose data is stored, so a cut lands on a known row): a cut in a
+  row, a cut after the image data, a whole file, an Adam7 file cut after two passes, a cut before any image data, data
+  corrupt before the cut, data short in a whole file, and a partial image converted.
 - **The sweep** (`tests/src/sweep.kama`, `imagetests --sweep`), natively in debug and in release: every single-bit flip
-  and every truncation of every fixture libpng decodes (crafted ones up to 3 KB), 1,165,833 decodes, with no trap. A flip
+  and every truncation of every fixture libpng decodes (crafted ones up to 3 KB), each truncation again with `partial`,
+  1,298,030 decodes, with no trap. A flip
   inside a chunk's type or data has the chunk's CRC put right first, as libpng's OSS-Fuzz harness has libpng ignore
   CRCs, so the flip reaches the code behind the check. The debug build compiles the package and std at the release
-  level (`debug.optimize` in `tests/kama.json`), which keeps kama's overflow traps and bounds checks: about 23 s a leg
+  level (`debug.optimize` in `tests/kama.json`), which keeps kama's overflow traps and bounds checks: about 24 s a leg
   on the Windows box, where `-O0` took 405 s.

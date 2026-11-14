@@ -1,5 +1,5 @@
 // The gate's sweep (AGENTS.image.md § Decided, 2): every single-bit flip and every truncation of every fixture libpng
-// decodes (a crafted one up to 3 KB), each one decoded. A decode answers an image or an error and never ends the program, so a run that reaches its
+// decodes (a crafted one up to 3 KB), each one decoded, and each truncation again with `partial`. A decode answers an image or an error and never ends the program, so a run that reaches its
 // last line found no trap. `imagetests --sweep` runs it alone, in debug and in release, since a release build wraps an
 // overflow that debug traps.
 //
@@ -43,6 +43,8 @@ fn void fixCrc(ref DynamicArray<uint8> s, isize start) {
 
 fn void sweep(ref Run run, const ref Table t) {
     DecodeOptions options = DecodeOptions.defaults();
+    DecodeOptions partial = DecodeOptions.defaults();
+    partial.partial = true;
     Instant t0 = monotonicNow();
     int64 files = 0;
     int64 bytes = 0;
@@ -84,6 +86,9 @@ fn void sweep(ref Run run, const ref Table t) {
         for (isize cut = 0; cut < n; cut = cut + 1) {
             Result<Image, ImageError> r = decode(bytes: file.slice(from: 0, count: cut), options: options);
             if (r.isOk()) { decoded = decoded + 1; } else { refused = refused + 1; }
+            // and as a viewer would ask for it, with partial
+            Result<Image, ImageError> q = decode(bytes: file.slice(from: 0, count: cut), options: partial);
+            if (q.isOk()) { decoded = decoded + 1; } else { refused = refused + 1; }
         }
         files = files + 1;
         bytes = bytes + cast<int64>(n);

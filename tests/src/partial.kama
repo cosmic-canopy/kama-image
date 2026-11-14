@@ -1,0 +1,138 @@
+// `DecodeOptions.partial` (AGENTS.image.md § Decided, 2): a file that ends early gives the rows decoded before the cut,
+// for a viewer, and says it is partial; the rest of the image is 0. Only a file that ends early: a cut before any image
+// data, and image data that is corrupt or short in a whole file, are still refused. Each file is built with stored
+// (uncompressed) deflate, so a cut lands on a known row.
+
+import {
+    std::collections::DynamicArray, std::compress::zlib::ZlibWriter, std::compress::deflate::DeflateLevel, std::io::StringWriter,
+    image::Image, image::ImageError, image::ImageErrorKind, image::PixelFormat, image::DecodeOptions, image::png::decode,
+    Run, chunk, signature, header, headerWith, rowsOf, empty, refusedAs,
+};
+
+export { partialCases };
+
+fn DynamicArray<uint8> stored(const ref DynamicArray<uint8> raw) {
+    ZlibWriter<StringWriter> z = ZlibWriter.make(sink: StringWriter.make(), level: DeflateLevel::Store);
+    bool wrote = match (z.write(bytes: raw.view())) { case Ok(value: k): true; case Err(error: e): false; };
+    return match (give z.finish()) {
+        case Ok(value: s): { StringWriter sw = give s; := give sw.takeBytes(); }
+        case Err(error: u): DynamicArray.empty();
+    };
+}
+
+// A 4-wide grey file of `rows` rows, row r all r + 1, its image data stored; and `dataAt`, where that data begins.
+fn DynamicArray<uint8> greyRows(isize rows, bool interlaced, ref isize dataAt) {
+    DynamicArray<uint8> raw = DynamicArray.empty();
+    if (interlaced) {
+        // 8x8, Adam7: the passes' rows, each 1 + width bytes, every pixel its pass number
+        InlineArray<isize>#(8) widths = [1, 1, 2, 2, 4, 4, 8, 0];
+        InlineArray<isize>#(8) heights = [1, 1, 1, 2, 2, 4, 4, 0];
+        for (isize p = 0; p < 7; p = p + 1) {
+            for (isize r = 0; r < heights[p]; r = r + 1) {
+                raw.add(item: 0);
+                for (isize x = 0; x < widths[p]; x = x + 1) { raw.add(item: truncate<uint8>(p + 1)); }
+            }
+        }
+    } else {
+        for (isize r = 0; r < rows; r = r + 1) {
+            raw.add(item: 0);
+            for (isize x = 0; x < 4; x = x + 1) { raw.add(item: truncate<uint8>(r + 1)); }
+        }
+    }
+    DynamicArray<uint8> png = signature();
+    uint32 w = interlaced ? 8ui32 : 4ui32;
+    uint32 h = interlaced ? 8ui32 : cast<uint32>(rows);
+    chunk(png: ref png, kind: "IHDR", data: headerWith(w: w, h: h, depth: 8, colourType: 0, compression: 0, filter: 0,
+                                                     interlace: interlaced ? 1 : 0), badCrc: false);
+    // the IDAT's data starts 8 bytes in, and the stored stream's first row 2 + 5 bytes after that (zlib's header, then
+    // a stored block's)
+    dataAt = png.length() + 8 + 7;
+    chunk(png: ref png, kind: "IDAT", data: stored(raw: raw), badCrc: false);
+    chunk(png: ref png, kind: "IEND", data: empty(), badCrc: false);
+    return give png;
+}
+
+fn DynamicArray<uint8> cut(const ref DynamicArray<uint8> png, isize n) {
+    DynamicArray<uint8> c = DynamicArray.empty();
+    c.addAll(items: png.slice(from: 0, count: n));
+    return give c;
+}
+
+fn void partialCases(ref Run run) {
+    DecodeOptions partial = DecodeOptions.defaults();
+    partial.partial = true;
+    isize dataAt = 0;
+    DynamicArray<uint8> whole = greyRows(rows: 8, interlaced: false, dataAt: ref dataAt);
+
+    // cut two bytes into row 3: rows 0 to 2 decode, the rest is 0, and the image says it is partial
+    {
+        DynamicArray<uint8> c = cut(png: whole, n: dataAt + 3 * 5 + 2);
+        Result<Image, ImageError> r = decode(bytes: c.view(), options: partial);
+        match (give r) {
+            case Err(error: e): { string m = e.message(); run.fail(name: "a file cut in row 3, partial", why: "refused: ${m}"); }
+            case Ok(value: img): {
+                bool rows = false;
+                borrow img.samples8() as s {
+                    // RGBA, 4 pixels a row: rows 0 to 2 are r + 1, opaque; row 3 on is 0
+                    rows = s[0] == 1 && s[3] == 255 && s[2 * 16] == 3 && s[2 * 16 + 15] == 255 && s[3 * 16] == 0 && s[3 * 16 + 3] == 0
+                        && s[7 * 16 + 15] == 0;
+                }
+                if (rows && img.isPartial()) { run.pass(); } else { run.fail(name: "a file cut in row 3, partial", why: "not rows 0 to 2, or not partial"); }
+                Result<Image, ImageError> c2 = img.convert(to: PixelFormat::Rgba16Unorm);
+                bool still = match (give c2) { case Ok(value: x): x.isPartial(); case Err(error: e): false; };
+                if (still) { run.pass(); } else { run.fail(name: "a partial image converted", why: "no longer partial"); }
+            }
+        };
+    }
+    // image data corrupt before the cut is refused, partial or not: the stored block's NLEN, just before row 0, broken
+    {
+        DynamicArray<uint8> c = cut(png: whole, n: dataAt + 3 * 5 + 2);
+        c[dataAt - 1] = c[dataAt - 1] ^ 0x01;
+        refusedAs(run: ref run, name: "image data corrupt before the cut, partial", png: c, options: partial, kind: ImageErrorKind::Data, at: -2);
+    }
+    // without partial, the same cut is refused
+    refusedAs(run: ref run, name: "a file cut in row 3, not partial", png: cut(png: whole, n: dataAt + 3 * 5 + 2), options: DecodeOptions.defaults(),
+              kind: ImageErrorKind::Truncated, at: -2);
+    // a cut before any image data is refused, partial or not
+    refusedAs(run: ref run, name: "a file cut inside IHDR, partial", png: cut(png: whole, n: 20), options: partial,
+              kind: ImageErrorKind::Truncated, at: -2);
+    // a cut after the image data (no IEND): the whole image, and not partial
+    {
+        DynamicArray<uint8> c = cut(png: whole, n: whole.length() - 12);
+        Result<Image, ImageError> r = decode(bytes: c.view(), options: partial);
+        bool ok = match (give r) { case Ok(value: img): !img.isPartial() && img.height() == 8; case Err(error: e): false; };
+        if (ok) { run.pass(); } else { run.fail(name: "a file cut after its image data, partial", why: "not the whole image"); }
+    }
+    // a whole file is never partial
+    {
+        Result<Image, ImageError> r = decode(bytes: whole.view(), options: partial);
+        bool ok = match (give r) { case Ok(value: img): !img.isPartial(); case Err(error: e): false; };
+        if (ok) { run.pass(); } else { run.fail(name: "a whole file, partial", why: "partial, or refused"); }
+    }
+    // interlaced: cut after passes 1 and 2 (2 bytes each), the pixels they hold, and nothing else
+    {
+        isize at = 0;
+        DynamicArray<uint8> png = greyRows(rows: 0, interlaced: true, dataAt: ref at);
+        DynamicArray<uint8> c = cut(png: png, n: at + 4 + 1);
+        Result<Image, ImageError> r = decode(bytes: c.view(), options: partial);
+        match (give r) {
+            case Err(error: e): { string m = e.message(); run.fail(name: "an interlaced file cut after pass 2, partial", why: "refused: ${m}"); }
+            case Ok(value: img): {
+                bool ok = false;
+                // pass 1's pixel is (0, 0), pass 2's (4, 0); (2, 0) belongs to pass 4, not decoded
+                borrow img.samples8() as s { ok = s[0] == 1 && s[4 * 4] == 2 && s[2 * 4] == 0 && s[2 * 4 + 3] == 0; }
+                if (ok && img.isPartial()) { run.pass(); } else { run.fail(name: "an interlaced file cut after pass 2, partial", why: "not passes 1 and 2 alone"); }
+            }
+        };
+    }
+    // a whole file whose image data is a row short is corrupt, not cut: refused, partial or not
+    {
+        DynamicArray<uint8> raw = rowsOf(rows: 3, rowBytes: 4, filter: 0, fill: 9);
+        DynamicArray<uint8> png = signature();
+        chunk(png: ref png, kind: "IHDR", data: header(w: 4ui32, h: 4ui32, depth: 8, colourType: 0), badCrc: false);
+        chunk(png: ref png, kind: "IDAT", data: stored(raw: raw), badCrc: false);
+        chunk(png: ref png, kind: "IEND", data: empty(), badCrc: false);
+        refusedAs(run: ref run, name: "image data a row short in a whole file, partial", png: png, options: partial,
+                  kind: ImageErrorKind::Data, at: -2);
+    }
+}

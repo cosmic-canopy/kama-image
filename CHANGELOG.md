@@ -21,6 +21,7 @@ package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   light levels (`ContentLight`).
 - `DecodeOptions.keepGrey`: a grey PNG as one channel, or two with alpha.
 - `Image.convert(to:)`: another pixel format, sample by sample, with the metadata kept.
+- `DecodeOptions.partial` and `Image.isPartial()`: the rows a file that ends early holds, for a viewer.
 - The tests' sweep: every single-bit flip and every truncation of every fixture, in debug and in release.
 
 ### Notes

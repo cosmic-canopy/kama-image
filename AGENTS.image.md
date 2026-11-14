@@ -23,8 +23,8 @@ image format). Its first users:
 ## Where things stand
 
 **Seeded on 2026-11-14 with `kama seed` on kama 0.9.947+gf919c10e; built on 0.9.949, kyoten's pin.** IMG-1, PNG
-decoding, is under way: its first two parts are built, the decode and the colour chunks ([SPEC.md](SPEC.md)), and its
-options and gate sweep come next ([ROADMAP_DETAIL.md](ROADMAP_DETAIL.md#png-decode)). Whether it is a first-party
+decoding, is built ([SPEC.md](SPEC.md)): the decode, the colour chunks, the sweep in the gate, `keepGrey`, `partial` and
+`convert(to:)`. IMG-2, PNG encoding, is next ([ROADMAP_DETAIL.md](ROADMAP_DETAIL.md#png-encode)). Whether it is a first-party
 package, as kama ruled `@kama/graphics` one (KR-309), is kama's to rule; the owner relays the question.
 
 **A short design pass comes before any code,** as `@kama/graphics`' and `@kama/audio`'s did. Each question is measured

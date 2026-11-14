@@ -731,6 +731,10 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "h8a.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.decoded(name: "hapng.png", width: 8, height: 8, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 4236399726ui32);
+    t.colour(name: "hapng.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
+             chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
+             iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
     t.refused(name: "hbadadler.png", kind: ImageErrorKind::DataChecksum);   // libpng: IDAT: incorrect data check
     t.decoded(name: "hbadcrc-text.png", width: 32, height: 32, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 2271824604ui32);
     t.colour(name: "hbadcrc-text.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,

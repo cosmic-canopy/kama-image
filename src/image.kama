@@ -123,6 +123,7 @@ type resource Image implements BytesViewable<ConstView<uint8>>, Samples8, Sample
     Optional<Cicp> cicpCodes;
     Optional<MasteringDisplay> mastering;
     Optional<ContentLight> light;
+    bool partialRows;
 
     ctor make(isize width, isize height, PixelFormat format, AlphaMode alpha, ColorSpace colorSpace) {
         this.w = width;
@@ -140,6 +141,7 @@ type resource Image implements BytesViewable<ConstView<uint8>>, Samples8, Sample
         this.cicpCodes = Optional::None;
         this.mastering = Optional::None;
         this.light = Optional::None;
+        this.partialRows = false;
     }
 
     // An image of 8-bit samples (`R8Unorm`, `Rg8Unorm`, `Rgba8Unorm`), row by row from the top, `samples` holding
@@ -185,6 +187,8 @@ type resource Image implements BytesViewable<ConstView<uint8>>, Samples8, Sample
     public const fn Optional<Cicp> cicp() { return this.cicpCodes; }
     public const fn Optional<MasteringDisplay> masteringDisplay() { return this.mastering; }
     public const fn Optional<ContentLight> contentLight() { return this.light; }
+    // Whether rows are missing: a file decoded with `partial` that ended before its image did. The missing pixels are 0.
+    public const fn bool isPartial() { return this.partialRows; }
 
     // What a decoder found, or an encoder is to write, besides the samples. Nothing here changes the samples.
     public fn void setColorSpace(ColorSpace space) { this.space = space; }
@@ -194,6 +198,7 @@ type resource Image implements BytesViewable<ConstView<uint8>>, Samples8, Sample
     public fn void setCicp(Cicp codes) { this.cicpCodes = Optional::Some(value: codes); }
     public fn void setMasteringDisplay(MasteringDisplay display) { this.mastering = Optional::Some(value: display); }
     public fn void setContentLight(ContentLight levels) { this.light = Optional::Some(value: levels); }
+    public fn void setPartial(bool partial) { this.partialRows = partial; }
 
     // Every sample as bytes, in the host's order: what a texture upload takes.
     public const fn ConstView<uint8> bytes() {
@@ -246,6 +251,7 @@ type resource Image implements BytesViewable<ConstView<uint8>>, Samples8, Sample
         made.cicpCodes = this.cicpCodes;
         made.mastering = this.mastering;
         made.light = this.light;
+        made.partialRows = this.partialRows;
         return Result::Ok(value: give made);
     }
 

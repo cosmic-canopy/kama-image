@@ -300,8 +300,8 @@ fn ColorSpace spaceOf(const ref Chunks c) {
 // Reconstructs the image from its inflated rows into `out8` or `out16`: -1 when it decodes, else the byte of `raw` it
 // stopped at, with `badFilter` saying whether a row named no filter or a pixel named a palette entry past its end.
 fn int64 reconstruct(ref FixedArray<uint8> raw, const ref Header h, const ref Chunks c, const ref FixedArray<uint8> palette,
-                     const ref FixedArray<uint8> alphas, isize outChannels, ref FixedArray<uint8> out8, ref FixedArray<uint16> out16,
-                     ref bool badFilter) {
+                     const ref FixedArray<uint8> alphas, isize outChannels, isize available, ref FixedArray<uint8> out8,
+                     ref FixedArray<uint16> out16, ref bool badFilter) {
     isize off = 0;
     isize w = cast<isize>(h.width);
     isize step = cast<isize>(h.filterStep());
@@ -318,6 +318,8 @@ fn int64 reconstruct(ref FixedArray<uint8> raw, const ref Header h, const ref Ch
         isize dx = cast<isize>(passDx(p: p));
         isize dy = cast<isize>(passDy(p: p));
         for (isize r = 0; r < ph; r = r + 1) {
+            // a partial file's data stops before a row that is not all there, and every row after it
+            if (off + rb + 1 > available) { return -1; }
             uint8 kind = raw[off];
             if (kind > 4) { badFilter = true; return cast<int64>(off); }
             isize at = off + 1;
@@ -414,15 +416,35 @@ fn Result<Image, ImageError> decode(ConstView<uint8> bytes, const ref DecodeOpti
     FixedArray<uint8> alphas = FixedArray.make(size: 256);
     DynamicArray<uint8> data = DynamicArray.empty();
     isize at = 8;
+    bool truncated = false;
     while (true) {
-        if (n - at < 12) { return refuse(kind: ImageErrorKind::Truncated, at: cast<int64>(n), chunk: 0); }
+        // The file ends inside this chunk: refused, unless `partial` asks for what came before and the image data has
+        // begun, or begins here, when the data this chunk holds is kept, its CRC unchecked.
+        bool whole = n - at >= 12 && cast<int64>(be32(b: bytes, at: at)) <= cast<int64>(n - at) - 12;
+        if (!whole) {
+            bool dataHere = n - at >= 8 && be32(b: bytes, at: at + 4) == IDAT && seenHeader && !dataEnded
+                && (h.colourType != 3 || c.hasPalette);
+            if (options.partial && (dataStarted || dataHere)) {
+                if (dataHere) {
+                    isize present = n - at - 8;
+                    if (cast<int64>(present) > cast<int64>(be32(b: bytes, at: at))) { present = cast<isize>(be32(b: bytes, at: at)); }
+                    if (!take(left: ref left, amount: cast<int64>(present))) { return refuse(kind: ImageErrorKind::Limit, at: cast<int64>(at), chunk: IDAT); }
+                    if (!dataStarted) { c.firstData = cast<int64>(at); }
+                    dataStarted = true;
+                    data.addAll(items: bytes.slice(from: at + 8, count: present));
+                }
+                truncated = true;
+                break;
+            }
+            uint32 cut = n - at >= 8 ? be32(b: bytes, at: at + 4) : 0ui32;
+            return refuse(kind: ImageErrorKind::Truncated, at: cast<int64>(n), chunk: cut);
+        }
         uint32 len32 = be32(b: bytes, at: at);
         uint32 kind = be32(b: bytes, at: at + 4);
         int64 start = cast<int64>(at);
         for (isize i = 4; i < 8; i = i + 1) {
             if (!isLetter(c: bytes[at + i])) { return refuse(kind: ImageErrorKind::ChunkType, at: start + 4, chunk: 0); }
         }
-        if (cast<int64>(len32) > cast<int64>(n - at) - 12) { return refuse(kind: ImageErrorKind::Truncated, at: cast<int64>(n), chunk: kind); }
         isize len = cast<isize>(len32);
         bool critical = (bytes[at + 4] & 0x20) == 0;
         bool crcGood = crc32(bytes: bytes.slice(from: at + 4, count: len + 4)) == be32(b: bytes, at: at + 8 + len);
@@ -592,24 +614,32 @@ fn Result<Image, ImageError> decode(ConstView<uint8> bytes, const ref DecodeOpti
             };
         }
     }
-    if (failed || ended) { return refuse(kind: ImageErrorKind::Data, at: -1, chunk: IDAT); }
-    // The stream must end where the image does, and its Adler-32 hold.
-    FixedArray<uint8> one = FixedArray.make(size: 1);
-    Result<isize, IoError> end = z.read(into: one.viewMut());
-    match (end) {
-        case Ok(value: k): { }
-        case Err(error: e): { failed = true; failure = e.kind(); }
-    };
-    if (failed) {
-        if (failure == IoErrorKind::InvalidData) { return refuse(kind: ImageErrorKind::DataChecksum, at: -1, chunk: IDAT); }
-        return refuse(kind: ImageErrorKind::Data, at: -1, chunk: IDAT);
+    bool rowsMissing = false;
+    if (truncated) {
+        // A stream cut with the file ends where the file does: what inflated is kept, unless the data itself is corrupt.
+        // Its end and its Adler-32 cannot be checked.
+        if (failed && failure != IoErrorKind::UnexpectedEof) { return refuse(kind: ImageErrorKind::Data, at: -1, chunk: IDAT); }
+        rowsMissing = got < total;
+    } else {
+        if (failed || ended) { return refuse(kind: ImageErrorKind::Data, at: -1, chunk: IDAT); }
+        // The stream must end where the image does, and its Adler-32 hold.
+        FixedArray<uint8> one = FixedArray.make(size: 1);
+        Result<isize, IoError> end = z.read(into: one.viewMut());
+        match (end) {
+            case Ok(value: k): { }
+            case Err(error: e): { failed = true; failure = e.kind(); }
+        };
+        if (failed) {
+            if (failure == IoErrorKind::InvalidData) { return refuse(kind: ImageErrorKind::DataChecksum, at: -1, chunk: IDAT); }
+            return refuse(kind: ImageErrorKind::Data, at: -1, chunk: IDAT);
+        }
     }
 
     FixedArray<uint8> out8 = FixedArray.make(size: h.depth == 16 ? 0 : samples);
     FixedArray<uint16> out16 = FixedArray.make(size: h.depth == 16 ? samples : 0);
     bool badFilter = false;
-    int64 bad = reconstruct(raw: ref raw, h: h, c: c, palette: palette, alphas: alphas, outChannels: outChannels, out8: ref out8,
-                            out16: ref out16, badFilter: ref badFilter);
+    int64 bad = reconstruct(raw: ref raw, h: h, c: c, palette: palette, alphas: alphas, outChannels: outChannels, available: got,
+                            out8: ref out8, out16: ref out16, badFilter: ref badFilter);
     if (bad >= 0) { return refuse(kind: badFilter ? ImageErrorKind::Data : ImageErrorKind::Palette, at: -1, chunk: IDAT); }
 
     bool straight = h.colourType == 4 || h.colourType == 6 || c.hasKey || c.alphaEntries > 0;
@@ -627,7 +657,7 @@ fn Result<Image, ImageError> decode(ConstView<uint8> bytes, const ref DecodeOpti
         made = Image.fromSamples8(width: w, height: ht, format: f8, alpha: alpha, colorSpace: space, samples: give out8);
         dropSamples16(samples: give out16);
     }
-    return attach(made: give made, c: c, iccName: give iccName, icc: give icc, exif: give exif);
+    return attach(made: give made, c: c, iccName: give iccName, icc: give icc, exif: give exif, partial: rowsMissing);
 }
 
 fn void dropSamples8(FixedArray<uint8> samples) { }
@@ -637,7 +667,7 @@ fn void dropText(string text) { }
 
 // The image, with what the chunks gave besides its samples and colour space.
 fn Result<Image, ImageError> attach(Result<Image, ImageError> made, const ref Chunks c, string iccName, DynamicArray<uint8> icc,
-                                   DynamicArray<uint8> exif) {
+                                   DynamicArray<uint8> exif, bool partial) {
     return match (give made) {
         case Err(error: e): {
             dropText(text: give iccName);
@@ -647,6 +677,7 @@ fn Result<Image, ImageError> attach(Result<Image, ImageError> made, const ref Ch
         }
         case Ok(value: built): {
             Image img = give built;
+            img.setPartial(partial: partial);
             if (c.hasIcc) { img.setIccProfile(name: give iccName, profile: give icc); }
             else { dropText(text: give iccName); dropBytes(bytes: give icc); }
             if (c.hasExif) { img.setExif(exif: give exif); } else { dropBytes(bytes: give exif); }

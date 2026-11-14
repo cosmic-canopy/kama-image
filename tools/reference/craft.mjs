@@ -172,3 +172,11 @@ write('hc-hdr.png', colourPng({ depth: 16, before: [cicp(9, 16, 0, 1),
 write('hc-exif.png', colourPng({ after: [chunk('eXIf', Buffer.from('MM\0*\0\0\0\x08\0\0', 'latin1'))] }));
 write('hc-exif-bad.png', colourPng({ before: [chunk('eXIf', Buffer.from('XX\0*\0\0\0\x08', 'latin1'))] }));
 function u16s(...v) { return Buffer.concat(v.map((x) => { const b = Buffer.alloc(2); b.writeUInt16BE(x); return b; })); }
+// 13. An animated PNG (APNG, the PNG Third Edition's acTL, fcTL and fdAT): its default image is the IDAT, and a decoder
+//     that reads one image leaves the animation's chunks, all ancillary, alone.
+{
+    const frame = (seq, w, h) => Buffer.concat([u32(seq), u32(w), u32(h), u32(0), u32(0), Buffer.from([0, 1, 0, 10, 0, 0])]);
+    const second = zlib.deflateSync(Buffer.alloc(8 * (1 + 8 * 3), 0x40));
+    write('hapng.png', colourPng({ before: [chunk('acTL', Buffer.concat([u32(2), u32(0)])), chunk('fcTL', frame(0, 8, 8))],
+        after: [chunk('fcTL', frame(1, 8, 8)), chunk('fdAT', Buffer.concat([u32(2), second]))] }));
+}

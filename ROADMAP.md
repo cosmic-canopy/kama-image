@@ -18,9 +18,10 @@ now". Every format is a module a program imports, so a page carries only the for
 
 ## NOW: PNG, whole
 
+PNG decoding is built: [SPEC.md](SPEC.md) § PNG.
+
 | id | item | why |
 |---|---|---|
-| IMG-1 | **PNG decoding, whole**: every colour type and bit depth, palettes, transparency, interlacing and the colour chunks, into the `Image` type, within limits, strict, never ending the program; PngSuite and the crafted cases on every leg, and the flip-and-cut sweep in the gate | [detail](ROADMAP_DETAIL.md#png-decode) |
 | IMG-2 | **PNG encoding**: `standard()` and `archival()`, the filters and the colour chunks, the same bytes on every leg | [detail](ROADMAP_DETAIL.md#png-encode) |
 
 ## NEXT
@@ -39,7 +40,7 @@ now". Every format is a module a program imports, so a page carries only the for
 | IMG-7 | **OpenEXR** (GFX-3); its compressions and their licences are its question | [decided, 3](AGENTS.image.md#decided) |
 | IMG-8 | **WebP** (glTF's `EXT_texture_webp`); the browser's decoder on the web | [decided, 3](AGENTS.image.md#decided) |
 | IMG-9 | **AVIF** (glTF's `EXT_texture_avif`); the browser's decoder on the web | [decided, 3](AGENTS.image.md#decided) |
-| IMG-10 | **APNG's frames**, past the default image IMG-1 decodes | [decided, 3](AGENTS.image.md#decided) |
+| IMG-10 | **APNG's frames**, past the default image the decoder gives | [decided, 3](AGENTS.image.md#decided) |
 | IMG-11 | **JPEG XL** | [decided, 3](AGENTS.image.md#decided) |
 | IMG-12 | **The long tail**, each when a program pulls it: GIF, TGA, BMP, DDS, QOI, TIFF | [decided, 3](AGENTS.image.md#decided) |
 
