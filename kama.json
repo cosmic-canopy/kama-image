@@ -1,0 +1,18 @@
+{
+  "name": "@kama/image",
+  "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
+  "description": "Image codecs for every kama target: decoding and encoding PNG first, then the formats renderers and tools read",
+  "repository": "https://github.com/cosmic-canopy/kama-image",
+  "keywords": ["image", "png", "codec", "decode", "encode"],
+  "kind": "library",
+  "kama": ">=0.9.947",
+  "publish": {
+    "exclude": [
+      ".claude/", "AGENTS.md", "AGENTS.package.md", "AGENTS.image.md", "CLAUDE.md", "KAMA_GAPS.md"
+    ]
+  },
+  "modules": {
+    ".": { "visibility": "public" }
+  }
+}
