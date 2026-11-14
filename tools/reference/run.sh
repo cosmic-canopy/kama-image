@@ -8,5 +8,6 @@ cd "$(dirname "$0")/../.."
 node tools/reference/craft.mjs tests/fixtures/crafted tests/fixtures/pngsuite
 mkdir -p out/reference
 "${CC:-cc}" -O2 -o out/reference/expected tools/reference/expected.c ${LDFLAGS:-} -lpng16 -lz
-out/reference/expected tests/fixtures/pngsuite/*.png tests/fixtures/crafted/*.png > tests/src/expected.kama
+# tr: a C runtime that writes text as CRLF (Windows') would otherwise give the file another line ending each time
+out/reference/expected tests/fixtures/pngsuite/*.png tests/fixtures/crafted/*.png | tr -d '\r' > tests/src/expected.kama
 echo "wrote tests/src/expected.kama: $(grep -c 't.decoded' tests/src/expected.kama) decoded, $(grep -c 't.refused' tests/src/expected.kama) refused"
