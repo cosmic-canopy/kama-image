@@ -15,7 +15,7 @@ import {
     image::Primaries, image::Transfer, image::RenderingIntent, image::Cicp, image::MasteringDisplay, image::ContentLight,
     image::DecodeOptions,
     image::png::decode,
-    Table, fillExpected, strictCases, colourCases, sweep,
+    Table, fillExpected, strictCases, colourCases, convertCases, sweep,
 };
 
 export { Run };
@@ -253,6 +253,7 @@ fn uint8 main() {
     fixtures(run: ref run);
     strictCases(run: ref run);
     colourCases(run: ref run);
+    convertCases(run: ref run);
     int32 n = run.count();
     int32 f = run.failures();
     println(s: "image tests: ${n} cases, ${f} failed");

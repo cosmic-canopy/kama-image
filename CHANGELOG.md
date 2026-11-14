@@ -20,6 +20,7 @@ package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   name, Exif data, the rendering intent, the cICP code points, the mastering display (`MasteringDisplay`) and the content
   light levels (`ContentLight`).
 - `DecodeOptions.keepGrey`: a grey PNG as one channel, or two with alpha.
+- `Image.convert(to:)`: another pixel format, sample by sample, with the metadata kept.
 - The tests' sweep: every single-bit flip and every truncation of every fixture, in debug and in release.
 
 ### Notes

@@ -73,6 +73,13 @@ samples row by row from the top, four channels interleaved where the format has 
   - `masteringDisplay()`, an `Optional<MasteringDisplay>`: its red, green, blue and white x and y in units of
     0.00002, and its `maxLuminance` and `minLuminance` in units of 0.0001 cd/m²;
   - `contentLight()`, an `Optional<ContentLight>`: `maxCll` and `maxFall`, in units of 0.0001 cd/m².
+- **`convert(to:)`** gives the image in another `PixelFormat`, sample by sample, and keeps its colour space, alpha mode
+  and metadata (nothing here converts colour):
+  - 8 to 16 bits is × 257, and 16 to 8 rounds as libpng's `scale_16` does;
+  - a float to an unorm clamps to 0 to 1, a NaN is 0, and rounds half up;
+  - to a half float rounds to nearest even, past 65504 is infinity, and the subnormals are kept;
+  - one channel becomes two as (g, 1) and four as (g, g, g, 1), and two become four as (g, g, g, a);
+  - fewer channels than the image has are refused as `Unsupported`, since which to keep is the program's to say.
 - **Set,** by a decoder or by a program about to encode: `setColorSpace`, `setIccProfile(name:, profile:)`, `setExif`,
   `setRenderingIntent`, `setCicp`, `setMasteringDisplay` and `setContentLight`. None changes the samples.
 
@@ -155,7 +162,7 @@ height maps and masks; any other image decodes as without it. A caller raises or
 
 `tools/test.sh` is the gate: the roadmap's shape (`tools/check-roadmap.sh`), `kama check` on the package and its tests,
 then `tests/`, one program, built debug and release and run natively, and built for the web and run under node with its
-fixtures embedded. 446 cases on each leg:
+fixtures embedded. 459 cases on each leg:
 
 - **Every fixture held to libpng's answer:** PngSuite 2017jul19's 176 files (`tests/fixtures/pngsuite/`, with its
   licence) and 27 crafted cases (`tests/fixtures/crafted/`, written by `tools/reference/craft.mjs`):
@@ -179,6 +186,9 @@ fixtures embedded. 446 cases on each leg:
   - a gAMA of 0, out of place, or repeated;
   - Exif repeated, short, or past `maxBytes`;
   - mDCV and cLLI of the wrong length.
+- **`convert(to:)`** (`tests/src/convert.kama`): every 8-bit value to 16 bits and every 16-bit value to 8, half floats
+  from known float32 values (a tie, the largest finite, infinity, the smallest subnormal) and back, clamping and NaN,
+  each channel mapping, the refusals, and the metadata kept.
 - **The sweep** (`tests/src/sweep.kama`, `imagetests --sweep`), natively in debug and in release: every single-bit flip
   and every truncation of every fixture libpng decodes (crafted ones up to 3 KB), 1,165,833 decodes, with no trap. A flip
   inside a chunk's type or data has the chunk's CRC put right first, as libpng's OSS-Fuzz harness has libpng ignore

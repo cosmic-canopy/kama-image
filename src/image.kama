@@ -59,6 +59,54 @@ fn bool fits(isize width, isize height, isize channels, isize n) {
     return pixels * channels == n;
 }
 
+// A float32 as a half float's bits, rounded to nearest even: past 65504 is infinity, and a NaN stays one.
+fn uint16 halfOf(float32 f) {
+    uint32 x = bitcast<uint32>(f);
+    uint32 sign = (x >> 16) & 0x8000ui32;
+    uint32 exp = (x >> 23) & 0xffui32;
+    uint32 man = x & 0x7fffffui32;
+    if (exp == 0xffui32) { return truncate<uint16>(sign | (man != 0ui32 ? 0x7e00ui32 : 0x7c00ui32)); }
+    int32 e = cast<int32>(exp) - 112;
+    if (e >= 31) { return truncate<uint16>(sign | 0x7c00ui32); }
+    if (e <= 0) {
+        if (e < -10) { return truncate<uint16>(sign); }
+        uint32 full = man | 0x800000ui32;
+        int32 shift = 14 - e;
+        uint32 h = full >> shift;
+        uint32 rest = full & ((1ui32 << shift) - 1ui32);
+        uint32 mid = 1ui32 << (shift - 1);
+        if (rest > mid || (rest == mid && (h & 1ui32) != 0ui32)) { h = h + 1ui32; }
+        return truncate<uint16>(sign | h);
+    }
+    uint32 h = (cast<uint32>(e) << 10) | (man >> 13);
+    uint32 rest = man & 0x1fffui32;
+    if (rest > 0x1000ui32 || (rest == 0x1000ui32 && (h & 1ui32) != 0ui32)) { h = h + 1ui32; }
+    return truncate<uint16>(sign | h);
+}
+
+// A half float's bits as a float32, exactly.
+fn float32 floatOfHalf(uint16 bits) {
+    uint32 h = cast<uint32>(bits);
+    uint32 sign = (h & 0x8000ui32) << 16;
+    uint32 exp = (h >> 10) & 0x1fui32;
+    uint32 man = h & 0x3ffui32;
+    if (exp == 0ui32) {
+        if (man == 0ui32) { return bitcast<float32>(sign); }
+        uint32 e = 113ui32;
+        while ((man & 0x400ui32) == 0ui32) { man = man << 1; e = e - 1ui32; }
+        return bitcast<float32>(sign | (e << 23) | ((man & 0x3ffui32) << 13));
+    }
+    if (exp == 31ui32) { return bitcast<float32>(sign | 0x7f800000ui32 | (man << 13)); }
+    return bitcast<float32>(sign | ((exp + 112ui32) << 23) | (man << 13));
+}
+
+// A sample in [0, 1] as `scale` steps, rounded half up; below 0 and NaN are 0, above 1 is `scale`.
+fn int32 unorm(float32 v, float32 scale) {
+    if (!(v > 0.0f32)) { return 0; }
+    if (v >= 1.0f32) { return cast<int32>(scale); }
+    return cast<int32>(v * scale + 0.5f32);
+}
+
 type resource Image implements BytesViewable<ConstView<uint8>>, Samples8, Samples16, SamplesF32, IccProfileBytes, ExifBytes {
     isize w;
     isize h;
@@ -153,6 +201,54 @@ type resource Image implements BytesViewable<ConstView<uint8>>, Samples8, Sample
         if (this.fmt.sampleBytes() == 4) { return this.s32.view().bytes(); }
         return this.s8.view();
     }
+    // Sample `i` of the samples as a number: an unorm as 0 to 1, a float as it is.
+    const fn float32 sampleAt(isize i) {
+        if (this.fmt == PixelFormat::Rgba32Float) { return this.s32[i]; }
+        if (this.fmt == PixelFormat::Rgba16Float) { return floatOfHalf(bits: this.s16[i]); }
+        if (this.fmt.sampleBytes() == 2) { return cast<float32>(this.s16[i]) / 65535.0f32; }
+        return cast<float32>(this.s8[i]) / 255.0f32;
+    }
+
+    // This image in another format, sample by sample: 8 to 16 bits is × 257, 16 to 8 rounds (as libpng's scale_16 does),
+    // a float to an unorm clamps to 0 to 1 (a NaN is 0) and rounds half up, and to a half float rounds to nearest even.
+    // One channel becomes four as grey (g, g, g, 1), and two as grey and alpha (g, g, g, a); fewer channels than the
+    // image has are refused as `Unsupported`, since which to keep is the program's to say. The colour space, alpha mode
+    // and metadata are kept: nothing here converts colour.
+    public const fn Result<Image, ImageError> convert(PixelFormat to) {
+        isize from = this.fmt.channels();
+        isize into = to.channels();
+        if (into < from) { return Result::Err(error: ImageError.make(kind: ImageErrorKind::Unsupported, at: -1, chunk: 0)); }
+        isize pixels = this.w * this.h;
+        Image made = Image.make(width: this.w, height: this.h, format: to, alpha: this.alphaMode, colorSpace: this.space);
+        isize n = pixels * into;
+        if (to.sampleBytes() == 1) { made.s8 = FixedArray.make(size: n); }
+        else if (to.sampleBytes() == 2) { made.s16 = FixedArray.make(size: n); }
+        else { made.s32 = FixedArray.make(size: n); }
+        for (isize p = 0; p < pixels; p = p + 1) {
+            for (isize c = 0; c < into; c = c + 1) {
+                // which source channel each target channel takes: grey fills colour, and alpha is 1 where there is none
+                bool colour = into == 4 ? c < 3 : c == 0;
+                float32 v = 1.0f32;
+                if (from == into) { v = this.sampleAt(i: p * from + c); }
+                else if (colour) { v = this.sampleAt(i: p * from); }
+                else if (from == 2) { v = this.sampleAt(i: p * from + 1); }
+                isize at = p * into + c;
+                if (to == PixelFormat::Rgba32Float) { made.s32[at] = v; }
+                else if (to == PixelFormat::Rgba16Float) { made.s16[at] = halfOf(f: v); }
+                else if (to.sampleBytes() == 2) { made.s16[at] = truncate<uint16>(unorm(v: v, scale: 65535.0f32)); }
+                else { made.s8[at] = truncate<uint8>(unorm(v: v, scale: 255.0f32)); }
+            }
+        }
+        made.icc = copy this.icc;
+        made.iccName = copy this.iccName;
+        made.exifData = copy this.exifData;
+        made.intent = this.intent;
+        made.cicpCodes = this.cicpCodes;
+        made.mastering = this.mastering;
+        made.light = this.light;
+        return Result::Ok(value: give made);
+    }
+
     public const fn ConstView<uint8> samples8() { return this.s8.view(); }
     public const fn ConstView<uint16> samples16() { return this.s16.view(); }
     public const fn ConstView<float32> samplesF32() { return this.s32.view(); }

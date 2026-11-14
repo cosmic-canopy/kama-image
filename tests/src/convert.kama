@@ -1,0 +1,167 @@
+// `Image.convert(to:)` (AGENTS.image.md § Decided, 1): precision changes sample by sample, exactly where it can be (8 to
+// 16 bits is × 257, and back rounds as libpng's scale_16 does); a half float rounds to nearest even; one channel expands
+// as grey and two as grey and alpha; fewer channels are refused; the colour space, alpha mode and metadata carry over.
+
+import {
+    std::collections::DynamicArray, std::collections::FixedArray, std::fs::readFile, std::io::IoError,
+    image::Image, image::ImageError, image::ImageErrorKind, image::PixelFormat, image::AlphaMode, image::ColorSpace,
+    image::DecodeOptions, image::png::decode,
+    Run,
+};
+
+export { convertCases };
+
+fn Image image8(isize width, isize height, PixelFormat format, const ref FixedArray<uint8> samples) {
+    FixedArray<uint8> s = copy samples;
+    Result<Image, ImageError> r = Image.fromSamples8(width: width, height: height, format: format, alpha: AlphaMode::Straight,
+                                                     colorSpace: ColorSpace.srgb(), samples: give s);
+    return match (give r) { case Ok(value: img): give img; case Err(error: e): image8(width: 1, height: 1, format: PixelFormat::R8Unorm, samples: FixedArray.make(size: 1)); };
+}
+
+fn Image image16(isize width, isize height, PixelFormat format, const ref FixedArray<uint16> samples) {
+    FixedArray<uint16> s = copy samples;
+    Result<Image, ImageError> r = Image.fromSamples16(width: width, height: height, format: format, alpha: AlphaMode::Straight,
+                                                      colorSpace: ColorSpace.srgb(), samples: give s);
+    return match (give r) { case Ok(value: img): give img; case Err(error: e): image8(width: 1, height: 1, format: PixelFormat::R8Unorm, samples: FixedArray.make(size: 1)); };
+}
+
+fn Image imageF32(isize width, isize height, const ref FixedArray<float32> samples) {
+    FixedArray<float32> s = copy samples;
+    Result<Image, ImageError> r = Image.fromSamplesF32(width: width, height: height, format: PixelFormat::Rgba32Float,
+                                                       alpha: AlphaMode::Straight, colorSpace: ColorSpace.srgb(), samples: give s);
+    return match (give r) { case Ok(value: img): give img; case Err(error: e): image8(width: 1, height: 1, format: PixelFormat::R8Unorm, samples: FixedArray.make(size: 1)); };
+}
+
+// `img` converted, or a 1x1 R8 image when the conversion is refused, with `refused` set.
+fn Image converted(const ref Image img, PixelFormat to, ref bool refused) {
+    Result<Image, ImageError> r = img.convert(to: to);
+    refused = r.isErr();
+    return match (give r) { case Ok(value: c): give c; case Err(error: e): image8(width: 1, height: 1, format: PixelFormat::R8Unorm, samples: FixedArray.make(size: 1)); };
+}
+
+fn void convertCases(ref Run run) {
+    bool refused = false;
+
+    // 8 to 16 bits: every value × 257; and back, every 16-bit value rounds as (v × 255 + 32895) >> 16
+    {
+        FixedArray<uint8> all = FixedArray.make(size: 256);
+        for (isize i = 0; i < 256; i = i + 1) { all[i] = truncate<uint8>(i); }
+        Image a = image8(width: 16, height: 16, format: PixelFormat::R8Unorm, samples: all);
+        Image b = converted(img: a, to: PixelFormat::R16Unorm, refused: ref refused);
+        isize bad = refused ? 256 : 0;
+        borrow b.samples16() as s { for (isize i = 0; i < s.length(); i = i + 1) { if (cast<isize>(s[i]) != i * 257) { bad = bad + 1; } } }
+        if (bad == 0) { run.pass(); } else { run.fail(name: "8 to 16 bits", why: "${bad} values not × 257"); }
+
+        FixedArray<uint16> every = FixedArray.make(size: 65536);
+        for (isize i = 0; i < 65536; i = i + 1) { every[i] = truncate<uint16>(i); }
+        Image c = image16(width: 256, height: 256, format: PixelFormat::R16Unorm, samples: every);
+        Image d = converted(img: c, to: PixelFormat::R8Unorm, refused: ref refused);
+        isize off = refused ? 65536 : 0;
+        borrow d.samples8() as s {
+            for (isize i = 0; i < s.length(); i = i + 1) { if (cast<isize>(s[i]) != (i * 255 + 32895) >> 16) { off = off + 1; } }
+        }
+        if (off == 0) { run.pass(); } else { run.fail(name: "16 to 8 bits", why: "${off} values not libpng's scale_16"); }
+    }
+
+    // half floats: exact round trips, and known bit patterns from float32
+    {
+        FixedArray<uint8> all = FixedArray.make(size: 256 * 4);
+        for (isize i = 0; i < 1024; i = i + 1) { all[i] = truncate<uint8>(i / 4); }
+        Image a = image8(width: 16, height: 16, format: PixelFormat::Rgba8Unorm, samples: all);
+        Image h = converted(img: a, to: PixelFormat::Rgba16Float, refused: ref refused);
+        Image back = converted(img: h, to: PixelFormat::Rgba8Unorm, refused: ref refused);
+        isize bad = 0;
+        borrow back.samples8() as s { for (isize i = 0; i < s.length(); i = i + 1) { if (s[i] != all[i]) { bad = bad + 1; } } }
+        if (bad == 0 && !refused) { run.pass(); } else { run.fail(name: "8 bits to a half float and back", why: "${bad} values moved"); }
+
+        InlineArray<float32>#(8) inputs = [1.0f32, 0.5f32, -2.0f32, 65504.0f32, 1000000.0f32, 0.000000059604645f32, 0.33333334f32, 70000.0f32];
+        InlineArray<uint16>#(8) want = [0x3C00ui16, 0x3800ui16, 0xC000ui16, 0x7BFFui16, 0x7C00ui16, 0x0001ui16, 0x3555ui16, 0x7C00ui16];
+        FixedArray<float32> f = FixedArray.make(size: 8);
+        for (isize i = 0; i < 8; i = i + 1) { f[i] = inputs[i]; }
+        Image g = imageF32(width: 2, height: 1, samples: f);
+        Image hb = converted(img: g, to: PixelFormat::Rgba16Float, refused: ref refused);
+        isize wrong = 0;
+        borrow hb.samples16() as s { for (isize i = 0; i < 8; i = i + 1) { if (s[i] != want[i]) { wrong = wrong + 1; } } }
+        if (wrong == 0 && !refused) { run.pass(); } else { run.fail(name: "float32 to half-float bits", why: "${wrong} of 8 wrong"); }
+        // back to float32 exactly (the smallest subnormal is 2^-24, bits 0x33800000), and to the same half bits again
+        Image f32 = converted(img: hb, to: PixelFormat::Rgba32Float, refused: ref refused);
+        Image again = converted(img: f32, to: PixelFormat::Rgba16Float, refused: ref refused);
+        uint32 tiny = 0;
+        borrow f32.samplesF32() as s { tiny = bitcast<uint32>(s[5]); }
+        isize moved = 0;
+        borrow again.samples16() as s { for (isize i = 0; i < 8; i = i + 1) { if (s[i] != want[i]) { moved = moved + 1; } } }
+        if (tiny == 0x33800000ui32 && moved == 0 && !refused) { run.pass(); }
+        else { run.fail(name: "half floats back to float32", why: "2^-24 as bits ${tiny}, ${moved} of 8 moved"); }
+    }
+
+    // a tie rounds to even: 1 + 3 x 2^-11 lies halfway between 0x3C01 and 0x3C02, and 1 + 2^-11 between 0x3C00 and 0x3C01
+    {
+        FixedArray<float32> f = FixedArray.make(size: 4);
+        f[0] = 1.00146484375f32; f[1] = 1.00048828125f32;
+        Image g = imageF32(width: 1, height: 1, samples: f);
+        Image h = converted(img: g, to: PixelFormat::Rgba16Float, refused: ref refused);
+        bool even = false;
+        borrow h.samples16() as s { even = s[0] == 0x3C02ui16 && s[1] == 0x3C00ui16; }
+        if (even && !refused) { run.pass(); } else { run.fail(name: "a half-float tie", why: "not rounded to even"); }
+    }
+
+    // floats to unorm clamp, and NaN is 0
+    {
+        FixedArray<float32> f = FixedArray.make(size: 4);
+        f[0] = -1.0f32; f[1] = 2.0f32; f[2] = 0.0f32 / 0.0f32; f[3] = 0.5f32;
+        Image g = imageF32(width: 1, height: 1, samples: f);
+        Image u = converted(img: g, to: PixelFormat::Rgba8Unorm, refused: ref refused);
+        bool ok = false;
+        borrow u.samples8() as s { ok = s[0] == 0 && s[1] == 255 && s[2] == 0 && s[3] == 128; }
+        if (ok && !refused) { run.pass(); } else { run.fail(name: "floats to 8 bits", why: "not clamped, or NaN not 0"); }
+    }
+
+    // channels: grey to four, grey and alpha to four, and fewer refused
+    {
+        FixedArray<uint8> g = FixedArray.make(size: 2);
+        g[0] = 10; g[1] = 200;
+        Image ga = image8(width: 1, height: 1, format: PixelFormat::Rg8Unorm, samples: g);
+        Image rgba = converted(img: ga, to: PixelFormat::Rgba8Unorm, refused: ref refused);
+        bool ok = false;
+        borrow rgba.samples8() as s { ok = s.length() == 4 && s[0] == 10 && s[1] == 10 && s[2] == 10 && s[3] == 200; }
+        if (ok && !refused) { run.pass(); } else { run.fail(name: "grey and alpha to RGBA", why: "not (g, g, g, a)"); }
+
+        FixedArray<uint8> one = FixedArray.make(size: 1);
+        one[0] = 77;
+        Image r = image8(width: 1, height: 1, format: PixelFormat::R8Unorm, samples: one);
+        Image four = converted(img: r, to: PixelFormat::Rgba16Unorm, refused: ref refused);
+        bool ok2 = false;
+        borrow four.samples16() as s { ok2 = s.length() == 4 && s[0] == 77 * 257 && s[1] == 77 * 257 && s[2] == 77 * 257 && s[3] == 65535; }
+        if (ok2 && !refused) { run.pass(); } else { run.fail(name: "grey to 16-bit RGBA", why: "not (g, g, g, 1)"); }
+
+        Image two = converted(img: r, to: PixelFormat::Rg8Unorm, refused: ref refused);
+        bool ok3 = false;
+        borrow two.samples8() as s { ok3 = s.length() == 2 && s[0] == 77 && s[1] == 255; }
+        if (ok3 && !refused) { run.pass(); } else { run.fail(name: "grey to grey and alpha", why: "not (g, 1)"); }
+
+        Image down = converted(img: rgba, to: PixelFormat::R8Unorm, refused: ref refused);
+        if (refused) { run.pass(); } else { run.fail(name: "RGBA to one channel", why: "converted, where it is refused"); }
+        Result<Image, ImageError> why = rgba.convert(to: PixelFormat::Rg8Unorm);
+        bool unsupported = match (give why) { case Ok(value: x): false; case Err(error: e): e.kind() == ImageErrorKind::Unsupported; };
+        if (unsupported) { run.pass(); } else { run.fail(name: "RGBA to two channels", why: "not refused as unsupported"); }
+    }
+
+    // the colour space, alpha mode and metadata carry over
+    {
+        Result<DynamicArray<uint8>, IoError> read = readFile(path: "fixtures/crafted/hiccp.png");
+        DynamicArray<uint8> file = match (give read) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+        Result<Image, ImageError> r = decode(bytes: file.view(), options: DecodeOptions.defaults());
+        match (give r) {
+            case Err(error: e): { run.fail(name: "a conversion keeps the metadata", why: "hiccp.png refused"); }
+            case Ok(value: img): {
+                Image c = converted(img: img, to: PixelFormat::Rgba32Float, refused: ref refused);
+                isize icc = 0;
+                borrow c.iccProfile() as b { icc = b.length(); }
+                string name = c.iccProfileName();
+                bool same = c.colorSpace().primaries == img.colorSpace().primaries && c.alpha() == img.alpha();
+                if (icc == 464 && name == "probe" && same && c.format() == PixelFormat::Rgba32Float) { run.pass(); }
+                else { run.fail(name: "a conversion keeps the metadata", why: "profile ${icc} bytes, named ${name}"); }
+            }
+        };
+    }
+}
