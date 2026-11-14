@@ -29,22 +29,9 @@ first-party package, as kama ruled `@kama/graphics` one (KR-309), is kama's to r
 first where it can be, then asked of the owner in full: the problem, an example, the options and the production
 answer. The answers are recorded below with their reasons, and the rows they create are in [ROADMAP.md](ROADMAP.md)
 (ids `IMG-<n>`). **All five were measured on 2026-11-14, on kama 0.9.949, and put to the owner the same day**: the
-evidence is [RESEARCH.md](RESEARCH.md), its probes in `.scratch/img-probe-*/`. Four are decided; one waits on the owner:
+evidence is [RESEARCH.md](RESEARCH.md), its probes in `.scratch/img-probe-*/`. All five are decided:
 
-1. **The web: the browser's decoders and encoders, or kama's own everywhere?** *Proposed, not decided.* The proposal is
-   kama's PNG codec on every leg, with the browser's own decoders later for the lossy formats on the web. The owner
-   (2026-11-14): "I think your recommendation is likely good so far". The owner then asked four things, and each was
-   answered the same day:
-   - **Whether a request checked every frame costs anything:** one acquire load, 1 ns natively and 0.6 ns on wasm
-     (`.scratch/img-probe-poll/`). kama on the web has no way to wait on a promise, and `@kama/gpu`'s rule forbids a
-     callback into kama.
-   - **The codec's size:** +7.9 KB brotli to decode and +12.9 KB with the encoder (RESEARCH § 1.3), only in a program
-     that imports it.
-   - **Whether the browser's decoders can serve the lossy formats on the web:** yes.
-   - **Whether these could be build switches.** Importing a format's module is one switch. The target decides the
-     other, which decoder backs a format on each leg, inside the package. No flag changes what a PNG decode means.
-
-   Waiting on the owner's confirmation. Nothing that depends on it is built.
+1. **The web: the browser's codecs, or kama's everywhere:** decided (§ Decided, 5).
 2. **The image type:** decided (§ Decided, 1).
 3. **Untrusted input:** decided (§ Decided, 2).
 4. **The formats and their order:** decided (§ Decided, 3).
@@ -126,6 +113,32 @@ evidence is [RESEARCH.md](RESEARCH.md), its probes in `.scratch/img-probe-*/`. F
      - On a 1080p photograph, `Frozen` takes 3.9 s against `Level6`'s 0.8 s, which is too slow for a screenshot's
        default.
      - A browser's encoder keeps neither promise.
+5. **Decided on 2026-11-14: PNG is decoded and encoded by kama on every leg, and the browser's own decoders serve the lossy
+   formats on the web** (question 1). The owner first said "I think your recommendation is likely good so far". The
+   owner then asked four things, each answered the same day, and confirmed: "sounds good to me".
+   - **PNG, on every leg:** kama's codec decodes and encodes.
+     - Every browser decodes an 8-bit PNG exactly through a GPU copy, but none keeps 16 bits, and Chromium and Firefox
+       turn 16 into 8 differently.
+     - Firefox and Chromium accept files libpng refuses.
+     - The browsers' encoders give different bytes and lose straight alpha.
+   - **JPEG, WebP and AVIF on the web:** the browser's own decoder, faster and smaller there. A lossy format has no one
+     exact answer to keep.
+     - Natively, kama's or a vendored decoder.
+     - Which backs a format on each leg is chosen inside the package by target (`@compileFor(ARCH_WASM32)`), behind
+       one API.
+     - The details are decided at those rows (IMG-4, IMG-8, IMG-9).
+   - **The switches are imports and targets, never a program's flag:**
+     - A format a program does not import costs it nothing.
+     - No flag turns a PNG decode over to the browser, since that would quietly change what a decode means: 16 bits
+       lost, different pixels in Chromium and in Firefox, and broken files accepted.
+   - **A browser decode is a request, checked once a frame where a program loads its assets:** one acquire load, 1 ns
+     natively and 0.6 ns on wasm (`.scratch/img-probe-poll/`). It is not a callback into kama, which `@kama/gpu`'s rule
+     forbids. kama on the web has no way to wait on a promise, and a frame should not wait on a decode anyway.
+   - **Not this package's:** a large 8-bit texture on the web is fastest when the browser decodes it straight onto the
+     GPU (`copyExternalImageToTexture`, exact for every 8-bit file measured). That is `@kama/graphics`' texture loader's
+     to weigh at its GFX-2, since this package names no GPU.
+   - **Why:** RESEARCH § 1. kama's PNG decode on the web is slower than the browser's: 295 ms at kama's `-Oz`, or 84 ms
+     at `-O3`, against about 30 ms on a 2048² texture. Most of that gap is KIMG-1, kama's KR-332.
 
 ## Where the truth is
 

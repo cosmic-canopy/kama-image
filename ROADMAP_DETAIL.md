@@ -35,7 +35,7 @@ cosmic-forge, which reads PNG headers by hand today.
   - **The flip-and-cut sweep** over every PngSuite file, in the gate, in debug and release (decision 2).
 - **It starts from** the design pass's sketch (`.scratch/img-probe-kama/`), which is throwaway: it matched libpng on
   the 57 files it takes, and its per-byte loops are what made it twice libpng's time.
-- **It needs** kama 0.9.949's `std::compress::zlib` and `std::digest::crc32`, and **question 1's confirmation** that a
+- **It needs** kama 0.9.949's `std::compress::zlib` and `std::digest::crc32`, and question 1's answer (decision 5): a
   PNG is decoded by kama on every leg.
 - **Done:**
   - every PngSuite file decodes to libpng's pixels, or is refused as libpng refuses it, on every leg, and so does every
