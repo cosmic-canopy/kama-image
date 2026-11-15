@@ -1,0 +1,431 @@
+// The colour chunks the encoder writes (IMG-2; AGENTS.image.md § Decided, 4): each colour space written as the chunks
+// that give it back, in libpng's order (IHDR, cLLI, mDCV, cICP, iCCP, sRGB, gAMA, cHRM, eXIf, IDAT, IEND); what an image
+// carries written back and decoded again; and what is refused as `Metadata`, with the chunk it is about.
+
+import {
+    std::collections::DynamicArray, std::collections::FixedArray, std::collections::ConstView,
+    std::compress::zlib::ZlibReader, std::io::BufReader, std::io::SliceReader, std::io::IoError,
+    std::digest::crc32::crc32,
+    image::Image, image::ImageError, image::ImageErrorKind, image::PixelFormat, image::AlphaMode, image::ColorSpace,
+    image::Primaries, image::Transfer, image::Chromaticities, image::RenderingIntent, image::Cicp, image::MasteringDisplay,
+    image::ContentLight, image::DecodeOptions, image::chunkCode,
+    image::png::decode, image::png::encode, image::png::EncodeOptions,
+    Run, chunksOf, encodedBy, sameMetadata, patterned, profile, goodProfile, spaceName,
+};
+
+export { encodeColourCases };
+
+fn uint32 word(ConstView<uint8> b, isize at) {
+    return (cast<uint32>(b[at]) << 24) | (cast<uint32>(b[at + 1]) << 16) | (cast<uint32>(b[at + 2]) << 8) | cast<uint32>(b[at + 3]);
+}
+
+// A chunk type's four letters.
+fn string letters(uint32 kind) {
+    if (kind == chunkCode(text: "IHDR")) { return "IHDR"; }
+    if (kind == chunkCode(text: "cLLI")) { return "cLLI"; }
+    if (kind == chunkCode(text: "mDCV")) { return "mDCV"; }
+    if (kind == chunkCode(text: "cICP")) { return "cICP"; }
+    if (kind == chunkCode(text: "iCCP")) { return "iCCP"; }
+    if (kind == chunkCode(text: "sRGB")) { return "sRGB"; }
+    if (kind == chunkCode(text: "gAMA")) { return "gAMA"; }
+    if (kind == chunkCode(text: "cHRM")) { return "cHRM"; }
+    if (kind == chunkCode(text: "eXIf")) { return "eXIf"; }
+    if (kind == chunkCode(text: "IDAT")) { return "IDAT"; }
+    if (kind == chunkCode(text: "IEND")) { return "IEND"; }
+    return "????";
+}
+
+// A file's chunks' types, in order, IDAT once for a run of them: "IHDR sRGB gAMA cHRM IDAT IEND".
+fn string chunkNames(const ref DynamicArray<uint8> file) {
+    DynamicArray<uint32> kinds = DynamicArray.empty();
+    DynamicArray<isize> starts = DynamicArray.empty();
+    DynamicArray<isize> lengths = DynamicArray.empty();
+    chunksOf(file: file.view(), kinds: ref kinds, starts: ref starts, lengths: ref lengths);
+    string s = "";
+    for (isize i = 0; i < kinds.length(); i = i + 1) {
+        if (i > 0 && kinds[i] == kinds[i - 1]) { continue; }
+        if (i > 0) { s = s + " "; }
+        s = s + letters(kind: kinds[i]);
+    }
+    return s;
+}
+
+// The data of the first chunk of `kind` in `file`; empty when there is none.
+fn DynamicArray<uint8> dataOf(const ref DynamicArray<uint8> file, const ref string kind) {
+    DynamicArray<uint32> kinds = DynamicArray.empty();
+    DynamicArray<isize> starts = DynamicArray.empty();
+    DynamicArray<isize> lengths = DynamicArray.empty();
+    chunksOf(file: file.view(), kinds: ref kinds, starts: ref starts, lengths: ref lengths);
+    DynamicArray<uint8> d = DynamicArray.empty();
+    uint32 want = chunkCode(text: kind);
+    for (isize i = 0; i < kinds.length(); i = i + 1) {
+        if (kinds[i] == want) { d.addAll(items: file.slice(from: starts[i], count: lengths[i])); return give d; }
+    }
+    return give d;
+}
+
+// The data's bytes as numbers, "12 13 0 1", for a short chunk; its 4-byte words, "45455", for gAMA and cHRM.
+fn string bytesOf(const ref DynamicArray<uint8> d) {
+    string s = "";
+    for (isize i = 0; i < d.length(); i = i + 1) { uint8 b = d[i]; s = s + (i > 0 ? " " : "") + "${b}"; }
+    return s;
+}
+fn string wordsOf(const ref DynamicArray<uint8> d) {
+    string s = "";
+    for (isize i = 0; i + 4 <= d.length(); i = i + 4) { uint32 w = word(b: d.view(), at: i); s = s + (i > 0 ? " " : "") + "${w}"; }
+    return s;
+}
+
+// A 4 × 3 image of `format`, straight alpha where it has alpha, in `space`.
+fn Result<Image, ImageError> small(PixelFormat format, ColorSpace space) {
+    AlphaMode alpha = format.channels() == 1 ? AlphaMode::Opaque : AlphaMode::Straight;
+    Result<Image, ImageError> made = patterned(format: format, alpha: alpha, w: 4, h: 3, opaqueAlpha: 255);
+    return match (give made) {
+        case Ok(value: img): { Image i = give img; i.setColorSpace(space: space); := Result::Ok(value: give i); }
+        case Err(error: e): Result::Err(error: e);
+    };
+}
+
+// `img` written: its chunk list is `names`, the first chunk of `kind` holds `data` (as `bytesOf` or `wordsOf` reads it,
+// the latter when `words`), and it decodes back with the colour space `space` names ("Bt709 Srgb") and the metadata it
+// carried. "" when all hold.
+fn string writes(const ref Image img, const ref string names, const ref string kind, const ref string data, bool words,
+                 const ref string space) {
+    DynamicArray<uint8> file = DynamicArray.empty();
+    string why = encodedBy(img: img, options: EncodeOptions.standard(), file: ref file);
+    if (!why.isEmpty()) { return why; }
+    string got = chunkNames(file: file);
+    if (got != names) { return "chunks " + got + ", not " + names; }
+    if (!kind.isEmpty()) {
+        DynamicArray<uint8> d = dataOf(file: file, kind: kind);
+        string held = words ? wordsOf(d: d) : bytesOf(d: d);
+        if (held != data) { return kind + " holds " + held + ", not " + data; }
+    }
+    DecodeOptions o = DecodeOptions.defaults();
+    o.keepGrey = img.format().channels() < 4;
+    Result<Image, ImageError> back = decode(bytes: file.view(), options: o);
+    return match (give back) {
+        case Ok(value: again): {
+            ColorSpace s = again.colorSpace();
+            string named = spaceName(s: s);
+            := named != space ? "decoded as " + named + ", not " + space : sameMetadata(got: again, want: img, decoded: false);
+        }
+        case Err(error: e): { string m = e.message(); := "decoded again, refused (${m})"; }
+    };
+}
+
+fn void expectWrites(ref Run run, const ref string name, Result<Image, ImageError> made, const ref string names,
+                     const ref string kind, const ref string data, bool words, const ref string space) {
+    string why = match (give made) {
+        case Ok(value: img): writes(img: img, names: names, kind: kind, data: data, words: words, space: space);
+        case Err(error: e): "not made";
+    };
+    if (why.isEmpty()) { run.pass(); } else { run.fail(name: name, why: why); }
+}
+
+// `made` refused as `Metadata`, about `chunk` ("" for the colour space, which no one chunk states).
+fn void expectRefused(ref Run run, const ref string name, Result<Image, ImageError> made, const ref string chunk) {
+    string why = match (give made) {
+        case Ok(value: img): {
+            Result<DynamicArray<uint8>, ImageError> r = encode(image: img, options: EncodeOptions.standard());
+            uint32 want = chunk.isEmpty() ? 0ui32 : chunkCode(text: chunk);
+            := match (give r) {
+                case Ok(value: f): "encoded";
+                case Err(error: e): {
+                    string m = e.message();
+                    := e.kind() == ImageErrorKind::Metadata && e.chunk() == want ? "" : "refused as " + m;
+                }
+            };
+        }
+        case Err(error: e): "not made";
+    };
+    if (why.isEmpty()) { run.pass(); } else { run.fail(name: name, why: why); }
+}
+
+fn DynamicArray<uint8> bytesOfText(const ref string text) {
+    DynamicArray<uint8> b = DynamicArray.empty();
+    borrow text.bytes() as t { foreach (uint8 c in t) { b.add(item: c); } }
+    return give b;
+}
+
+fn DynamicArray<uint8> greyProfile() {
+    return profile(length: 132ui32, version: 2, profileClass: 0x6D6E7472ui32, space: 0x47524159ui32, magic: 0x61637370ui32,
+                   intent: 0ui32, tags: 0ui32, size: 132);
+}
+
+fn Result<Image, ImageError> profiled(PixelFormat format, const ref string name, DynamicArray<uint8> p) {
+    Result<Image, ImageError> made = small(format: format, space: ColorSpace.make(primaries: Primaries::IccProfile, transfer: Transfer::IccProfile));
+    return match (give made) {
+        case Ok(value: img): { Image i = give img; i.setIccProfile(name: copy name, profile: give p); := Result::Ok(value: give i); }
+        case Err(error: e): { discardProfile(p: give p); := Result::Err(error: e); }
+    };
+}
+
+fn void discardProfile(DynamicArray<uint8> p) { }
+
+fn MasteringDisplay display() {
+    MasteringDisplay m = MasteringDisplay.zero();
+    m.redX = 35400; m.redY = 14600; m.greenX = 8500; m.greenY = 39850; m.blueX = 6550; m.blueY = 2300;
+    m.whiteX = 15635; m.whiteY = 16450; m.maxLuminance = 10000000ui32; m.minLuminance = 50ui32;
+    return m;
+}
+
+fn void encodeColourCases(ref Run run) {
+    PixelFormat rgba = PixelFormat::Rgba8Unorm;
+    // Each colour space as the chunks that give it.
+    expectWrites(run: ref run, name: "an unspecified colour space writes no colour chunk", made: small(format: rgba, space: ColorSpace.unspecified()),
+                 names: "IHDR IDAT IEND", kind: "", data: "", words: false, space: "Unspecified Unspecified");
+    expectWrites(run: ref run, name: "sRGB as sRGB, with the gAMA and cHRM beside it", made: small(format: rgba, space: ColorSpace.srgb()),
+                 names: "IHDR sRGB gAMA cHRM IDAT IEND", kind: "sRGB", data: "0", words: false, space: "Bt709 Srgb");
+    expectWrites(run: ref run, name: "sRGB's gAMA is 1/2.2", made: small(format: rgba, space: ColorSpace.srgb()),
+                 names: "IHDR sRGB gAMA cHRM IDAT IEND", kind: "gAMA", data: "45455", words: true, space: "Bt709 Srgb");
+    expectWrites(run: ref run, name: "sRGB's cHRM is BT.709's", made: small(format: rgba, space: ColorSpace.srgb()),
+                 names: "IHDR sRGB gAMA cHRM IDAT IEND", kind: "cHRM", data: "31270 32900 64000 33000 30000 60000 15000 6000",
+                 words: true, space: "Bt709 Srgb");
+    expectWrites(run: ref run, name: "linear sRGB as a cICP", made: small(format: rgba, space: ColorSpace.linearSrgb()),
+                 names: "IHDR cICP IDAT IEND", kind: "cICP", data: "1 8 0 1", words: false, space: "Bt709 Linear");
+    expectWrites(run: ref run, name: "Display P3 as a cICP",
+                 made: small(format: rgba, space: ColorSpace.make(primaries: Primaries::DisplayP3, transfer: Transfer::Srgb)),
+                 names: "IHDR cICP IDAT IEND", kind: "cICP", data: "12 13 0 1", words: false, space: "DisplayP3 Srgb");
+    expectWrites(run: ref run, name: "BT.2020 with HLG as a cICP",
+                 made: small(format: PixelFormat::Rgba16Unorm, space: ColorSpace.make(primaries: Primaries::Bt2020, transfer: Transfer::Hlg)),
+                 names: "IHDR cICP IDAT IEND", kind: "cICP", data: "9 18 0 1", words: false, space: "Bt2020 Hlg");
+    {
+        Result<Image, ImageError> made = small(format: PixelFormat::Rgba16Unorm, space: ColorSpace.make(primaries: Primaries::Bt2020, transfer: Transfer::Pq));
+        Result<Image, ImageError> hdr = match (give made) {
+            case Ok(value: img): {
+                Image i = give img;
+                i.setMasteringDisplay(display: display());
+                i.setContentLight(levels: ContentLight.make(maxCll: 10000000ui32, maxFall: 4000000ui32));
+                := Result::Ok(value: give i);
+            }
+            case Err(error: e): Result::Err(error: e);
+        };
+        expectWrites(run: ref run, name: "BT.2020 with PQ, its mastering display and light levels, in libpng's order", made: give hdr,
+                     names: "IHDR cLLI mDCV cICP IDAT IEND", kind: "cICP", data: "9 16 0 1", words: false, space: "Bt2020 Pq");
+    }
+    {
+        Result<Image, ImageError> made = small(format: PixelFormat::Rgba16Unorm, space: ColorSpace.make(primaries: Primaries::Bt2020, transfer: Transfer::Pq));
+        Result<Image, ImageError> hdr = match (give made) {
+            case Ok(value: img): { Image i = give img; i.setMasteringDisplay(display: display()); := Result::Ok(value: give i); }
+            case Err(error: e): Result::Err(error: e);
+        };
+        expectWrites(run: ref run, name: "mDCV as the image holds it", made: give hdr, names: "IHDR mDCV cICP IDAT IEND", kind: "mDCV",
+                     data: "138 72 57 8 33 52 155 170 25 150 8 252 61 19 64 66 0 152 150 128 0 0 0 50", words: false, space: "Bt2020 Pq");
+    }
+    {
+        ColorSpace g = ColorSpace.make(primaries: Primaries::Unspecified, transfer: Transfer::Gamma);
+        g.gamma = 45455ui32;
+        expectWrites(run: ref run, name: "a gamma as gAMA", made: small(format: rgba, space: g),
+                     names: "IHDR gAMA IDAT IEND", kind: "gAMA", data: "45455", words: true, space: "Unspecified Gamma");
+    }
+    expectWrites(run: ref run, name: "linear with no primaries as a gAMA of 1.0",
+                 made: small(format: rgba, space: ColorSpace.make(primaries: Primaries::Unspecified, transfer: Transfer::Linear)),
+                 names: "IHDR gAMA IDAT IEND", kind: "gAMA", data: "100000", words: true, space: "Unspecified Linear");
+    {
+        ColorSpace c = ColorSpace.make(primaries: Primaries::Custom, transfer: Transfer::Gamma);
+        c.gamma = 50000ui32;
+        c.chromaticities = Chromaticities.make(whiteX: 31000, whiteY: 33000, redX: 65000, redY: 32000, greenX: 29000, greenY: 61000,
+                                               blueX: 14000, blueY: 7000);
+        expectWrites(run: ref run, name: "custom chromaticities as cHRM, beside their gAMA", made: small(format: rgba, space: c),
+                     names: "IHDR gAMA cHRM IDAT IEND", kind: "cHRM", data: "31000 33000 65000 32000 29000 61000 14000 7000",
+                     words: true, space: "Custom Gamma");
+    }
+    expectWrites(run: ref run, name: "Display P3's primaries alone as cHRM",
+                 made: small(format: rgba, space: ColorSpace.make(primaries: Primaries::DisplayP3, transfer: Transfer::Unspecified)),
+                 names: "IHDR cHRM IDAT IEND", kind: "cHRM", data: "31270 32900 68000 32000 26500 69000 15000 6000", words: true,
+                 space: "DisplayP3 Unspecified");
+
+    // What the image carries, written back.
+    {
+        Result<Image, ImageError> made = small(format: rgba, space: ColorSpace.srgb());
+        Result<Image, ImageError> intent = match (give made) {
+            case Ok(value: img): { Image i = give img; i.setRenderingIntent(intent: RenderingIntent::Saturation); := Result::Ok(value: give i); }
+            case Err(error: e): Result::Err(error: e);
+        };
+        expectWrites(run: ref run, name: "a rendering intent, written back", made: give intent,
+                     names: "IHDR sRGB gAMA cHRM IDAT IEND", kind: "sRGB", data: "2", words: false, space: "Bt709 Srgb");
+    }
+    expectWrites(run: ref run, name: "an ICC profile, written back", made: profiled(format: rgba, name: "probe", p: goodProfile()),
+                 names: "IHDR iCCP IDAT IEND", kind: "", data: "", words: false, space: "IccProfile IccProfile");
+    expectWrites(run: ref run, name: "a grey ICC profile on a grey image", made: profiled(format: PixelFormat::R8Unorm, name: "grey", p: greyProfile()),
+                 names: "IHDR iCCP IDAT IEND", kind: "", data: "", words: false, space: "IccProfile IccProfile");
+    expectWrites(run: ref run, name: "a profile's Latin-1 name", made: profiled(format: rgba, name: "café", p: goodProfile()),
+                 names: "IHDR iCCP IDAT IEND", kind: "", data: "", words: false, space: "IccProfile IccProfile");
+    {
+        // the name in Latin-1, its end, deflate, and the profile deflated
+        Result<Image, ImageError> made = profiled(format: rgba, name: "café", p: goodProfile());
+        string why = match (give made) {
+            case Ok(value: img): {
+                DynamicArray<uint8> file = DynamicArray.empty();
+                string w = encodedBy(img: img, options: EncodeOptions.standard(), file: ref file);
+                if (w.isEmpty()) {
+                    DynamicArray<uint8> d = dataOf(file: file, kind: "iCCP");
+                    string head = d.length() >= 6 ? bytesOf(d: dataOf(file: file, kind: "iCCP")) : "";
+                    if (d.length() < 6 || d[0] != 99 || d[1] != 97 || d[2] != 102 || d[3] != 233 || d[4] != 0 || d[5] != 0) { w = "iCCP starts " + head; }
+                    else {
+                        DynamicArray<uint8> packed = DynamicArray.empty();
+                        packed.addAll(items: d.slice(from: 6, count: d.length() - 6));
+                        ZlibReader<SliceReader> z = ZlibReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: give packed)), limit: 1000000ui64);
+                        DynamicArray<uint8> p = DynamicArray.empty();
+                        FixedArray<uint8> buf = FixedArray.make(size: 4096);
+                        while (true) {
+                            Result<isize, IoError> r = z.read(into: buf.viewMut());
+                            isize m = match (r) { case Ok(value: v): v; case Err(error: e): -1; };
+                            if (m <= 0) { break; }
+                            p.addAll(items: buf.view().slice(from: 0, count: m));
+                        }
+                        DynamicArray<uint8> want = goodProfile();
+                        if (crc32(bytes: p.view()) != crc32(bytes: want.view()) || p.length() != want.length()) { w = "the profile inflates to other bytes"; }
+                    }
+                }
+                := give w;
+            }
+            case Err(error: e): "not made";
+        };
+        if (why.isEmpty()) { run.pass(); } else { run.fail(name: "iCCP holds the name in Latin-1, then the profile deflated", why: why); }
+    }
+    {
+        Result<Image, ImageError> made = small(format: rgba, space: ColorSpace.unspecified());
+        Result<Image, ImageError> exif = match (give made) {
+            case Ok(value: img): { Image i = give img; i.setExif(exif: bytesOfText(text: "MM\u{0}*\u{0}\u{0}\u{0}\u{8}\u{0}\u{0}")); := Result::Ok(value: give i); }
+            case Err(error: e): Result::Err(error: e);
+        };
+        expectWrites(run: ref run, name: "Exif, written back", made: give exif, names: "IHDR eXIf IDAT IEND", kind: "eXIf",
+                     data: "77 77 0 42 0 0 0 8 0 0", words: false, space: "Unspecified Unspecified");
+    }
+    {
+        // a cICP, a profile, an intent, Exif, a mastering display and light levels: every chunk, in libpng's order
+        Result<Image, ImageError> made = profiled(format: PixelFormat::Rgba16Unorm, name: "probe", p: goodProfile());
+        Result<Image, ImageError> all = match (give made) {
+            case Ok(value: img): {
+                Image i = give img;
+                i.setColorSpace(space: ColorSpace.make(primaries: Primaries::DisplayP3, transfer: Transfer::Srgb));
+                i.setCicp(codes: Cicp.make(primaries: 12, transfer: 13, matrix: 0, fullRange: true));
+                i.setRenderingIntent(intent: RenderingIntent::RelativeColorimetric);
+                i.setExif(exif: bytesOfText(text: "II*\u{0}\u{8}\u{0}\u{0}\u{0}"));
+                i.setMasteringDisplay(display: display());
+                i.setContentLight(levels: ContentLight.make(maxCll: 1000ui32, maxFall: 400ui32));
+                := Result::Ok(value: give i);
+            }
+            case Err(error: e): Result::Err(error: e);
+        };
+        expectWrites(run: ref run, name: "every colour chunk at once, in libpng's order", made: give all,
+                     names: "IHDR cLLI mDCV cICP iCCP sRGB gAMA cHRM eXIf IDAT IEND", kind: "sRGB", data: "1", words: false,
+                     space: "DisplayP3 Srgb");
+    }
+
+    // Refused: what PNG cannot hold, and a colour space what the image carries contradicts.
+    {
+        Result<Image, ImageError> made = small(format: rgba, space: ColorSpace.unspecified());
+        Result<Image, ImageError> m = match (give made) {
+            case Ok(value: img): { Image i = give img; i.setCicp(codes: Cicp.make(primaries: 12, transfer: 13, matrix: 1, fullRange: true)); := Result::Ok(value: give i); }
+            case Err(error: e): Result::Err(error: e);
+        };
+        expectRefused(run: ref run, name: "a cICP whose matrix is not 0, refused", made: give m, chunk: "cICP");
+    }
+    expectRefused(run: ref run, name: "a profile with no name, refused", made: profiled(format: rgba, name: "", p: goodProfile()), chunk: "iCCP");
+    expectRefused(run: ref run, name: "a profile's name of 80 characters, refused",
+                  made: profiled(format: rgba, name: "12345678901234567890123456789012345678901234567890123456789012345678901234567890", p: goodProfile()),
+                  chunk: "iCCP");
+    expectWrites(run: ref run, name: "a profile's name of 79 characters",
+                 made: profiled(format: rgba, name: "1234567890123456789012345678901234567890123456789012345678901234567890123456789", p: goodProfile()),
+                 names: "IHDR iCCP IDAT IEND", kind: "", data: "", words: false, space: "IccProfile IccProfile");
+    expectRefused(run: ref run, name: "a profile's name with a leading space, refused", made: profiled(format: rgba, name: " probe", p: goodProfile()), chunk: "iCCP");
+    expectRefused(run: ref run, name: "a profile's name with a trailing space, refused", made: profiled(format: rgba, name: "probe ", p: goodProfile()), chunk: "iCCP");
+    expectRefused(run: ref run, name: "a profile's name with two spaces together, refused", made: profiled(format: rgba, name: "a  b", p: goodProfile()), chunk: "iCCP");
+    expectRefused(run: ref run, name: "a profile's name with a control character, refused", made: profiled(format: rgba, name: "a\u{9}b", p: goodProfile()), chunk: "iCCP");
+    expectRefused(run: ref run, name: "a profile's name past Latin-1, refused", made: profiled(format: rgba, name: "π", p: goodProfile()), chunk: "iCCP");
+    expectWrites(run: ref run, name: "a profile's name with one space", made: profiled(format: rgba, name: "a b", p: goodProfile()),
+                 names: "IHDR iCCP IDAT IEND", kind: "", data: "", words: false, space: "IccProfile IccProfile");
+    expectRefused(run: ref run, name: "an RGB profile on a grey image, refused", made: profiled(format: PixelFormat::R8Unorm, name: "probe", p: goodProfile()), chunk: "iCCP");
+    expectRefused(run: ref run, name: "a grey profile on a colour image, refused", made: profiled(format: rgba, name: "grey", p: greyProfile()), chunk: "iCCP");
+    expectRefused(run: ref run, name: "a profile libpng would not keep, refused",
+                  made: profiled(format: rgba, name: "probe", p: profile(length: 132ui32, version: 2, profileClass: 0x6D6E7472ui32, space: 0x52474220ui32,
+                                                                       magic: 0x78787878ui32, intent: 0ui32, tags: 0ui32, size: 132)),
+                  chunk: "iCCP");
+    {
+        Result<Image, ImageError> made = small(format: rgba, space: ColorSpace.unspecified());
+        Result<Image, ImageError> x = match (give made) {
+            case Ok(value: img): { Image i = give img; i.setExif(exif: bytesOfText(text: "XX\u{0}*\u{0}\u{0}\u{0}\u{8}")); := Result::Ok(value: give i); }
+            case Err(error: e): Result::Err(error: e);
+        };
+        expectRefused(run: ref run, name: "Exif with no byte-order mark, refused", made: give x, chunk: "eXIf");
+    }
+    expectRefused(run: ref run, name: "an ICC colour space with no profile, refused",
+                  made: small(format: rgba, space: ColorSpace.make(primaries: Primaries::IccProfile, transfer: Transfer::IccProfile)), chunk: "");
+    {
+        // sRGB's curve is not a power curve, so a gamma beside it states something sRGB would drop
+        ColorSpace s = ColorSpace.srgb();
+        s.gamma = 45455ui32;
+        expectRefused(run: ref run, name: "a gamma beside sRGB's curve, refused", made: small(format: rgba, space: s), chunk: "");
+    }
+    {
+        ColorSpace s = ColorSpace.srgb();
+        s.chromaticities = Chromaticities.make(whiteX: 31270, whiteY: 32900, redX: 68000, redY: 32000, greenX: 26500, greenY: 69000,
+                                               blueX: 15000, blueY: 6000);
+        expectRefused(run: ref run, name: "chromaticities beside sRGB that are not BT.709's, refused", made: small(format: rgba, space: s), chunk: "");
+    }
+    {
+        // the same two with a rendering intent carried, whose sRGB chunk gives sRGB on its own, so only the gamma, or the
+        // chromaticities, contradict it
+        ColorSpace s = ColorSpace.srgb();
+        s.gamma = 45455ui32;
+        Result<Image, ImageError> made = small(format: rgba, space: s);
+        Result<Image, ImageError> intent = match (give made) {
+            case Ok(value: img): { Image i = give img; i.setRenderingIntent(intent: RenderingIntent::Perceptual); := Result::Ok(value: give i); }
+            case Err(error: e): Result::Err(error: e);
+        };
+        expectRefused(run: ref run, name: "a gamma beside sRGB's curve and its intent, refused", made: give intent, chunk: "");
+    }
+    {
+        ColorSpace s = ColorSpace.srgb();
+        s.chromaticities = Chromaticities.make(whiteX: 31270, whiteY: 32900, redX: 68000, redY: 32000, greenX: 26500, greenY: 69000,
+                                               blueX: 15000, blueY: 6000);
+        Result<Image, ImageError> made = small(format: rgba, space: s);
+        Result<Image, ImageError> intent = match (give made) {
+            case Ok(value: img): { Image i = give img; i.setRenderingIntent(intent: RenderingIntent::Perceptual); := Result::Ok(value: give i); }
+            case Err(error: e): Result::Err(error: e);
+        };
+        expectRefused(run: ref run, name: "other chromaticities beside sRGB and its intent, refused", made: give intent, chunk: "");
+    }
+    {
+        // a cICP the image carries says BT.601's primaries, which Display P3 contradicts: the carried one is never replaced
+        Result<Image, ImageError> made = small(format: rgba, space: ColorSpace.make(primaries: Primaries::DisplayP3, transfer: Transfer::Srgb));
+        Result<Image, ImageError> both = match (give made) {
+            case Ok(value: img): { Image i = give img; i.setCicp(codes: Cicp.make(primaries: 5, transfer: 13, matrix: 0, fullRange: true)); := Result::Ok(value: give i); }
+            case Err(error: e): Result::Err(error: e);
+        };
+        expectRefused(run: ref run, name: "a carried cICP that names another space, beside Display P3, refused", made: give both, chunk: "");
+    }
+    {
+        // a profile describes the colour, so an image that says sRGB beside one contradicts it
+        Result<Image, ImageError> made = profiled(format: rgba, name: "probe", p: goodProfile());
+        Result<Image, ImageError> both = match (give made) {
+            case Ok(value: img): { Image i = give img; i.setColorSpace(space: ColorSpace.srgb()); := Result::Ok(value: give i); }
+            case Err(error: e): Result::Err(error: e);
+        };
+        expectRefused(run: ref run, name: "sRGB beside a profile, refused", made: give both, chunk: "");
+    }
+    expectRefused(run: ref run, name: "sRGB's curve with no primaries, refused",
+                  made: small(format: rgba, space: ColorSpace.make(primaries: Primaries::Unspecified, transfer: Transfer::Srgb)), chunk: "");
+    expectRefused(run: ref run, name: "a gamma of 0, refused",
+                  made: small(format: rgba, space: ColorSpace.make(primaries: Primaries::Unspecified, transfer: Transfer::Gamma)), chunk: "");
+    expectRefused(run: ref run, name: "custom primaries with no chromaticities, refused",
+                  made: small(format: rgba, space: ColorSpace.make(primaries: Primaries::Custom, transfer: Transfer::Unspecified)), chunk: "");
+    {
+        ColorSpace c = ColorSpace.make(primaries: Primaries::Custom, transfer: Transfer::Unspecified);
+        c.chromaticities = Chromaticities.make(whiteX: 31000, whiteY: 33000, redX: -1, redY: 32000, greenX: 29000, greenY: 61000,
+                                               blueX: 14000, blueY: 7000);
+        expectRefused(run: ref run, name: "a negative chromaticity, refused", made: small(format: rgba, space: c), chunk: "");
+    }
+    {
+        // a cICP the image carries names Display P3, so an image that says sRGB beside it contradicts it
+        Result<Image, ImageError> made = small(format: rgba, space: ColorSpace.srgb());
+        Result<Image, ImageError> both = match (give made) {
+            case Ok(value: img): { Image i = give img; i.setCicp(codes: Cicp.make(primaries: 12, transfer: 13, matrix: 0, fullRange: true)); := Result::Ok(value: give i); }
+            case Err(error: e): Result::Err(error: e);
+        };
+        expectRefused(run: ref run, name: "sRGB beside a cICP that names Display P3, refused", made: give both, chunk: "");
+    }
+}

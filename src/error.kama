@@ -17,8 +17,9 @@ type enum ImageErrorKind {
     Data,           // the compressed image data is malformed, or holds more or fewer bytes than the image needs
     DataChecksum,   // the compressed image data's own checksum (zlib's Adler-32) does not match it
     Limit,          // the decode would pass one of its `DecodeLimits`
-    Unsupported,    // a critical part of the file this decoder does not know, such as an unknown critical chunk
-    Samples;        // an image built from samples that do not fit its size or its format
+    Unsupported,    // a critical part of the file this decoder does not know, or of an image the format cannot hold
+    Samples,        // an image built from samples that do not fit its size or its format
+    Metadata;       // what an image carries besides its samples that the format cannot hold, or that disagrees with its colour space
 
     public const fn string name() {
         return match (this) {
@@ -34,6 +35,7 @@ type enum ImageErrorKind {
             case Limit: "limit";
             case Unsupported: "unsupported";
             case Samples: "samples";
+            case Metadata: "metadata";
         };
     }
 }

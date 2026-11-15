@@ -11,7 +11,7 @@ import {
     Run, put32, chunk, signature, header, deflated, rowsOf, empty, refusedAs,
 };
 
-export { colourCases };
+export { colourCases, profile, goodProfile, spaceName };
 
 fn DynamicArray<uint8> u32s(InlineArray<uint32>#(8) v, isize n) {
     DynamicArray<uint8> b = DynamicArray.empty();

@@ -7,13 +7,25 @@
 // row is filtered as the options say, `Adaptive` choosing as libpng's writer chooses, and the rows are deflated at the
 // options' level into IDAT chunks of 65,536 bytes, the last no longer: the bytes depend only on the image and the
 // options. What PNG cannot hold, premultiplied alpha and float samples, is refused, never converted.
+//
+// The colour chunks make the file decode back to the image's colour space with everything the image carries: what it
+// carries (a cICP, an ICC profile, a rendering intent, Exif, a mastering display, light levels) is written back as it
+// is, and its colour space is written where they do not give it. The check is the decoder's own precedence (`spaceOf`),
+// so metadata that contradicts the colour space, or that PNG cannot hold, is refused as `Metadata`. The chunks go in
+// libpng's order: IHDR, cLLI, mDCV, cICP, iCCP, sRGB, gAMA, cHRM, eXIf, IDAT, IEND.
 
 import {
     std::collections::DynamicArray, std::collections::FixedArray, std::collections::ConstView,
-    std::compress::zlib::ZlibWriter, std::io::IoError, std::io::Writer, std::io::Unfinished,
+    std::compress::zlib::ZlibWriter, std::compress::deflate::DeflateLevel, std::io::IoError, std::io::Writer,
+    std::io::Unfinished, std::io::StringWriter,
     std::digest::crc32::crc32,
-    image::Image, image::ImageError, image::ImageErrorKind, image::PixelFormat, image::AlphaMode,
-    image::png::detail::IHDR, image::png::detail::IDAT, image::png::detail::IEND, image::png::detail::paeth,
+    image::Image, image::ImageError, image::ImageErrorKind, image::PixelFormat, image::AlphaMode, image::ColorSpace,
+    image::Primaries, image::Transfer, image::Chromaticities, image::RenderingIntent, image::Cicp, image::MasteringDisplay,
+    image::ContentLight,
+    image::png::detail::IHDR, image::png::detail::IDAT, image::png::detail::IEND, image::png::detail::CICP,
+    image::png::detail::ICCP, image::png::detail::SRGB, image::png::detail::GAMA, image::png::detail::CHRM,
+    image::png::detail::MDCV, image::png::detail::CLLI, image::png::detail::EXIF, image::png::detail::be32,
+    image::png::detail::paeth, image::png::detail::Chunks, image::png::detail::iccValid, image::png::detail::spaceOf,
     EncodeOptions, Filter,
 };
 
@@ -30,6 +42,11 @@ fn Result<DynamicArray<uint8>, ImageError> refuse(ImageErrorKind kind, uint32 ch
 fn void put32(ref DynamicArray<uint8> b, uint32 v) {
     b.add(item: truncate<uint8>(v >> 24));
     b.add(item: truncate<uint8>(v >> 16));
+    b.add(item: truncate<uint8>(v >> 8));
+    b.add(item: truncate<uint8>(v));
+}
+
+fn void put16(ref DynamicArray<uint8> b, uint16 v) {
     b.add(item: truncate<uint8>(v >> 8));
     b.add(item: truncate<uint8>(v));
 }
@@ -171,6 +188,168 @@ fn bool deflate(ref ZlibWriter<IdatSink> z, ConstView<uint8> bytes) {
     return true;
 }
 
+// What the PNG Third Edition's cICP calls a set of primaries this package names (H.273): -1 for one it does not.
+fn int32 cicpPrimariesOf(Primaries p) {
+    return match (p) { case Bt709: 1; case Bt2020: 9; case DisplayP3: 12; case _: -1; };
+}
+
+// What cICP calls a transfer this package names (H.273): -1 for one it does not.
+fn int32 cicpTransferOf(Transfer t) {
+    return match (t) { case Srgb: 13; case Linear: 8; case Pq: 16; case Hlg: 18; case _: -1; };
+}
+
+// The chromaticities a cHRM chunk gives a named set of primaries: BT.709's are the PNG Third Edition's Table 17, as the
+// decoder names them; all 0 for any other.
+fn Chromaticities chromaticitiesOf(Primaries p) {
+    return match (p) {
+        case Bt709: Chromaticities.make(whiteX: 31270, whiteY: 32900, redX: 64000, redY: 33000, greenX: 30000, greenY: 60000,
+                                        blueX: 15000, blueY: 6000);
+        case DisplayP3: Chromaticities.make(whiteX: 31270, whiteY: 32900, redX: 68000, redY: 32000, greenX: 26500, greenY: 69000,
+                                            blueX: 15000, blueY: 6000);
+        case Bt2020: Chromaticities.make(whiteX: 31270, whiteY: 32900, redX: 70800, redY: 29200, greenX: 17000, greenY: 79700,
+                                         blueX: 13100, blueY: 4600);
+        case _: Chromaticities.none();
+    };
+}
+
+fn bool sameChromaticities(const ref Chromaticities a, const ref Chromaticities b) {
+    return a.whiteX == b.whiteX && a.whiteY == b.whiteY && a.redX == b.redX && a.redY == b.redY
+        && a.greenX == b.greenX && a.greenY == b.greenY && a.blueX == b.blueX && a.blueY == b.blueY;
+}
+
+fn bool unset(const ref Chromaticities c) { return sameChromaticities(a: c, b: Chromaticities.none()); }
+
+// Whether a cHRM chunk holds them: PNG stores each as an unsigned number.
+fn bool storable(const ref Chromaticities c) {
+    return c.whiteX >= 0 && c.whiteY >= 0 && c.redX >= 0 && c.redY >= 0 && c.greenX >= 0 && c.greenY >= 0 && c.blueX >= 0
+        && c.blueY >= 0;
+}
+
+// Whether colour chunks that give `got` give `want` back: the same primaries and transfer, and the gamma and the
+// chromaticities `want` holds, where it holds them. A colour space a program names holds neither; one a gAMA or cHRM
+// gave holds what they said.
+fn bool gives(const ref ColorSpace got, const ref ColorSpace want) {
+    if (got.primaries != want.primaries || got.transfer != want.transfer) { return false; }
+    if (want.gamma != 0ui32 && got.gamma != want.gamma) { return false; }
+    if (!unset(c: want.chromaticities) && !sameChromaticities(a: got.chromaticities, b: want.chromaticities)) { return false; }
+    return true;
+}
+
+// An ICC profile's name as iCCP holds it, in Latin-1, or empty when PNG cannot hold it: the PNG Third Edition (§ 11.3.2.3)
+// takes 1 to 79 printable Latin-1 characters and spaces, with no leading, trailing or consecutive space. libpng's writer
+// rewrites a name that breaks this; this encoder refuses it.
+fn DynamicArray<uint8> keywordOf(const ref string name) {
+    DynamicArray<uint8> k = DynamicArray.empty();
+    bool space = true;
+    foreach (char ch in name.chars()) {
+        uint32 v = cast<uint32>(ch);
+        if (v == 32ui32) {
+            if (space) { return DynamicArray.empty(); }
+            space = true;
+        } else if ((v > 32ui32 && v <= 126ui32) || (v >= 161ui32 && v <= 255ui32)) {
+            space = false;
+        } else {
+            return DynamicArray.empty();
+        }
+        k.add(item: truncate<uint8>(v));
+    }
+    if (space || k.length() > 79) { return DynamicArray.empty(); }
+    return give k;
+}
+
+// The colour chunks `image` is written with, into `c`, at colour type `colourType`: what it carries, written back as it
+// is, then its colour space where they do not give it. -1 when the file would decode to the image's colour space with
+// everything it carries; otherwise the chunk that cannot be written, or 0 for a colour space PNG cannot state.
+fn int64 colourChunks(const ref Image image, uint8 colourType, ref Chunks c) {
+    Optional<Cicp> carried = image.cicp();
+    bool matrixed = false;
+    match (carried) {
+        case Some(value: v): {
+            matrixed = v.matrix != 0;
+            c.hasCicp = true;
+            c.cicpPrimaries = cast<int32>(v.primaries);
+            c.cicpTransfer = cast<int32>(v.transfer);
+            c.cicpMatrix = cast<int32>(v.matrix);
+            c.cicpRange = v.fullRange ? 1 : 0;
+        }
+        case None: { }
+    };
+    // PNG holds RGB only, so cICP's matrix is 0 (the PNG Third Edition, § 11.3.2.6)
+    if (matrixed) { return cast<int64>(CICP); }
+    bool profiled = false;
+    bool usable = false;
+    borrow image.iccProfile() as p {
+        profiled = p.length() > 0;
+        if (profiled) { usable = iccValid(b: p, colourType: cast<int64>(colourType)); }
+    }
+    if (profiled) {
+        string name = image.iccProfileName();
+        DynamicArray<uint8> keyword = keywordOf(name: name);
+        if (!usable || keyword.length() == 0) { return cast<int64>(ICCP); }
+        c.hasIcc = true;
+    }
+    Optional<RenderingIntent> intent = image.renderingIntent();
+    match (intent) {
+        case Some(value: i): {
+            c.hasSrgb = true;
+            int32 n = match (i) { case Perceptual: 0; case RelativeColorimetric: 1; case Saturation: 2; case AbsoluteColorimetric: 3; };
+            c.intent = n;
+        }
+        case None: { }
+    };
+    ColorSpace want = image.colorSpace();
+    ColorSpace given = spaceOf(c: c);
+    if (gives(got: given, want: want)) { return -1; }
+
+    // Nothing carried gives the colour space, so it is written: sRGB for sRGB, a cICP for another space cICP names, and
+    // gAMA and cHRM for one they give.
+    bool fromChunks = want.gamma != 0ui32 || !unset(c: want.chromaticities);
+    int32 cp = cicpPrimariesOf(p: want.primaries);
+    int32 tf = cicpTransferOf(t: want.transfer);
+    if (want.primaries == Primaries::Bt709 && want.transfer == Transfer::Srgb && !fromChunks) {
+        c.hasSrgb = true;
+    } else if (cp >= 0 && tf >= 0 && !fromChunks && !c.hasCicp) {
+        c.hasCicp = true;
+        c.cicpPrimaries = cp;
+        c.cicpTransfer = tf;
+        c.cicpMatrix = 0;
+        c.cicpRange = 1;
+    } else {
+        uint32 g = want.transfer == Transfer::Linear && want.gamma == 0ui32 ? 100000ui32 : want.gamma;
+        if ((want.transfer == Transfer::Gamma || want.transfer == Transfer::Linear) && g >= 1ui32 && g <= 0x7fffffffui32) {
+            c.hasGamma = true;
+            c.gamma = cast<int64>(g);
+        }
+        Chromaticities ch = unset(c: want.chromaticities) ? chromaticitiesOf(p: want.primaries) : want.chromaticities;
+        if (!unset(c: ch) && storable(c: ch)) {
+            c.hasChrm = true;
+            c.chrm = ch;
+        }
+    }
+    ColorSpace again = spaceOf(c: c);
+    return gives(got: again, want: want) ? -1i64 : 0i64;
+}
+
+// The bytes as a zlib stream deflated at `level`; empty if the deflater failed, which in memory it does not.
+fn DynamicArray<uint8> zlibOf(ConstView<uint8> bytes, DeflateLevel level) {
+    ZlibWriter<StringWriter> z = ZlibWriter.make(sink: StringWriter.make(), level: level);
+    isize off = 0;
+    while (off < bytes.length()) {
+        Result<isize, IoError> r = z.write(bytes: bytes.slice(from: off, count: bytes.length() - off));
+        isize n = match (r) { case Ok(value: k): k; case Err(error: e): -1; };
+        if (n <= 0) { break; }
+        off = off + n;
+    }
+    Result<StringWriter, Unfinished<ZlibWriter<StringWriter>>> done = give z.finish();
+    DynamicArray<uint8> packed = DynamicArray.empty();
+    match (give done) {
+        case Ok(value: s): { StringWriter w = give s; packed = give w.takeBytes(); }
+        case Err(error: u): { }
+    };
+    if (off < bytes.length()) { return DynamicArray.empty(); }
+    return give packed;
+}
+
 fn Result<DynamicArray<uint8>, ImageError> encode(const ref Image image, const ref EncodeOptions options) {
     // What PNG cannot hold is refused: it says neither premultiplied alpha nor floats.
     bool unorm = match (image.format()) {
@@ -194,6 +373,32 @@ fn Result<DynamicArray<uint8>, ImageError> encode(const ref Image image, const r
     isize bpp = written * sb;
     isize rowBytes = w * bpp;
 
+    // The colour chunks, the profile and the Exif data, refused before anything is written when PNG cannot hold them.
+    Chunks c = Chunks.none();
+    int64 unwritable = colourChunks(image: image, colourType: colourType, c: ref c);
+    if (unwritable >= 0) { return refuse(kind: ImageErrorKind::Metadata, chunk: cast<uint32>(unwritable)); }
+    bool exifBad = false;
+    borrow image.exif() as e {
+        isize n = e.length();
+        if (n > 0) {
+            uint32 mark = n >= 4 ? be32(b: e, at: 0) : 0ui32;
+            exifBad = (mark != 0x49492A00ui32 && mark != 0x4D4D002Aui32) || cast<int64>(n) > 0x7fffffffi64;
+        }
+    }
+    if (exifBad) { return refuse(kind: ImageErrorKind::Metadata, chunk: EXIF); }
+    DynamicArray<uint8> profileData = DynamicArray.empty();
+    if (c.hasIcc) {
+        string name = image.iccProfileName();
+        profileData = keywordOf(name: name);
+        profileData.add(item: 0);   // the name's end
+        profileData.add(item: 0);   // deflate
+        borrow image.iccProfile() as prof {
+            DynamicArray<uint8> packed = zlibOf(bytes: prof, level: options.level);
+            profileData.addAll(items: packed.view());
+        }
+        if (cast<int64>(profileData.length()) > 0x7fffffffi64) { return refuse(kind: ImageErrorKind::Metadata, chunk: ICCP); }
+    }
+
     DynamicArray<uint8> file = DynamicArray.empty();
     InlineArray<uint8>#(8) signature = [137, 80, 78, 71, 13, 10, 26, 10];
     for (isize i = 0; i < 8; i = i + 1) { file.add(item: signature[i]); }
@@ -206,6 +411,63 @@ fn Result<DynamicArray<uint8>, ImageError> encode(const ref Image image, const r
     header.add(item: 0);   // adaptive filtering
     header.add(item: 0);   // no interlacing
     putChunk(file: ref file, kind: IHDR, data: header.view());
+    Optional<ContentLight> light = image.contentLight();
+    match (light) {
+        case Some(value: l): {
+            DynamicArray<uint8> d = DynamicArray.empty();
+            put32(b: ref d, v: l.maxCll);
+            put32(b: ref d, v: l.maxFall);
+            putChunk(file: ref file, kind: CLLI, data: d.view());
+        }
+        case None: { }
+    };
+    Optional<MasteringDisplay> display = image.masteringDisplay();
+    match (display) {
+        case Some(value: m): {
+            DynamicArray<uint8> d = DynamicArray.empty();
+            put16(b: ref d, v: m.redX); put16(b: ref d, v: m.redY);
+            put16(b: ref d, v: m.greenX); put16(b: ref d, v: m.greenY);
+            put16(b: ref d, v: m.blueX); put16(b: ref d, v: m.blueY);
+            put16(b: ref d, v: m.whiteX); put16(b: ref d, v: m.whiteY);
+            put32(b: ref d, v: m.maxLuminance);
+            put32(b: ref d, v: m.minLuminance);
+            putChunk(file: ref file, kind: MDCV, data: d.view());
+        }
+        case None: { }
+    };
+    if (c.hasCicp) {
+        DynamicArray<uint8> d = DynamicArray.empty();
+        d.add(item: truncate<uint8>(c.cicpPrimaries));
+        d.add(item: truncate<uint8>(c.cicpTransfer));
+        d.add(item: truncate<uint8>(c.cicpMatrix));
+        d.add(item: truncate<uint8>(c.cicpRange));
+        putChunk(file: ref file, kind: CICP, data: d.view());
+    }
+    if (c.hasIcc) { putChunk(file: ref file, kind: ICCP, data: profileData.view()); }
+    if (c.hasSrgb) {
+        DynamicArray<uint8> d = DynamicArray.empty();
+        d.add(item: truncate<uint8>(c.intent));
+        putChunk(file: ref file, kind: SRGB, data: d.view());
+        // and beside it the gAMA and cHRM the PNG Third Edition recommends (§ 11.3.2.5, Table 17), for a decoder that
+        // reads no sRGB: libpng's png_set_sRGB_gAMA_and_cHRM
+        c.hasGamma = true;
+        c.gamma = 45455;
+        c.hasChrm = true;
+        c.chrm = chromaticitiesOf(p: Primaries::Bt709);
+    }
+    if (c.hasGamma) {
+        DynamicArray<uint8> d = DynamicArray.empty();
+        put32(b: ref d, v: cast<uint32>(c.gamma));
+        putChunk(file: ref file, kind: GAMA, data: d.view());
+    }
+    if (c.hasChrm) {
+        DynamicArray<uint8> d = DynamicArray.empty();
+        InlineArray<int32>#(8) v = [c.chrm.whiteX, c.chrm.whiteY, c.chrm.redX, c.chrm.redY, c.chrm.greenX, c.chrm.greenY,
+                                    c.chrm.blueX, c.chrm.blueY];
+        for (isize k = 0; k < 8; k = k + 1) { put32(b: ref d, v: cast<uint32>(v[k])); }
+        putChunk(file: ref file, kind: CHRM, data: d.view());
+    }
+    borrow image.exif() as e { if (e.length() > 0) { putChunk(file: ref file, kind: EXIF, data: e); } }
 
     // The rows, each filtered and deflated, onto IDAT chunks.
     ZlibWriter<IdatSink> z = ZlibWriter.make(sink: IdatSink.make(file: give file), level: options.level);

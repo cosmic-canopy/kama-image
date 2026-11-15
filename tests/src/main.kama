@@ -15,10 +15,10 @@ import {
     image::Primaries, image::Transfer, image::RenderingIntent, image::Cicp, image::MasteringDisplay, image::ContentLight,
     image::DecodeOptions,
     image::png::decode,
-    Table, fillExpected, strictCases, colourCases, convertCases, partialCases, sweep, encodeCases,
+    Table, fillExpected, strictCases, colourCases, convertCases, partialCases, sweep, encodeCases, encodeColourCases,
 };
 
-export { Run, formatName, alphaName };
+export { Run, formatName, alphaName, intentNumber, mdcvCrc };
 
 type resource Run {
     int32 cases;
@@ -256,6 +256,7 @@ fn uint8 main() {
     convertCases(run: ref run);
     partialCases(run: ref run);
     encodeCases(run: ref run);
+    encodeColourCases(run: ref run);
     int32 n = run.count();
     int32 f = run.failures();
     println(s: "image tests: ${n} cases, ${f} failed");

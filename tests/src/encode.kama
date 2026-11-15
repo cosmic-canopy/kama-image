@@ -9,12 +9,12 @@ import {
     std::compress::zlib::ZlibReader, std::compress::deflate::DeflateLevel,
     std::digest::crc32::crc32,
     image::Image, image::ImageError, image::ImageErrorKind, image::PixelFormat, image::AlphaMode, image::ColorSpace,
-    image::DecodeOptions, image::chunkCode,
+    image::DecodeOptions, image::chunkCode, image::Cicp, image::ContentLight,
     image::png::decode, image::png::encode, image::png::EncodeOptions, image::png::Filter,
-    Run, Table, fillExpected, formatName, alphaName,
+    Run, Table, fillExpected, formatName, alphaName, intentNumber, mdcvCrc, spaceName,
 };
 
-export { encodeCases, chunksOf, encodedBy, sameAs };
+export { encodeCases, chunksOf, encodedBy, sameAs, sameMetadata, patterned };
 
 fn uint32 be32At(ConstView<uint8> b, isize at) {
     return (cast<uint32>(b[at]) << 24) | (cast<uint32>(b[at + 1]) << 16) | (cast<uint32>(b[at + 2]) << 8) | cast<uint32>(b[at + 3]);
@@ -95,6 +95,69 @@ fn string sameAs(const ref Image got, const ref Image want) {
     return "";
 }
 
+fn int64 cicpNumber(Optional<Cicp> c) {
+    return match (c) {
+        case None: -1i64;
+        case Some(value: v): (cast<int64>(v.primaries) << 24) | (cast<int64>(v.transfer) << 16) | (cast<int64>(v.matrix) << 8) | (v.fullRange ? 1i64 : 0i64);
+    };
+}
+
+fn int64 lightNumber(Optional<ContentLight> l) {
+    return match (l) { case None: -1i64; case Some(value: v): (cast<int64>(v.maxCll) << 32) | cast<int64>(v.maxFall); };
+}
+
+// What `got` carries besides its samples against `want`: "" when it is the same. When `want` came from a decode, its
+// colour space too, exactly (primaries, transfer, gamma and chromaticities), and every chunk it carried. When a program
+// built it, `got` may carry the sRGB intent or the cICP that states the colour space `want` named without carrying one,
+// and the caller holds the colour space.
+fn string sameMetadata(const ref Image got, const ref Image want, bool decoded) {
+    if (decoded) {
+        ColorSpace a = got.colorSpace();
+        ColorSpace b = want.colorSpace();
+        string aSpace = spaceName(s: a);
+        string bSpace = spaceName(s: b);
+        if (aSpace != bSpace) { return "colour space " + aSpace + ", not " + bSpace; }
+        uint32 ag = a.gamma;
+        uint32 bg = b.gamma;
+        if (ag != bg) { return "gamma ${ag}, not ${bg}"; }
+        InlineArray<int32>#(8) aChrm = [a.chromaticities.whiteX, a.chromaticities.whiteY, a.chromaticities.redX, a.chromaticities.redY,
+            a.chromaticities.greenX, a.chromaticities.greenY, a.chromaticities.blueX, a.chromaticities.blueY];
+        InlineArray<int32>#(8) bChrm = [b.chromaticities.whiteX, b.chromaticities.whiteY, b.chromaticities.redX, b.chromaticities.redY,
+            b.chromaticities.greenX, b.chromaticities.greenY, b.chromaticities.blueX, b.chromaticities.blueY];
+        for (isize k = 0; k < 8; k = k + 1) {
+            int32 x = aChrm[k];
+            int32 y = bChrm[k];
+            if (x != y) { return "chromaticity ${k}: ${x}, not ${y}"; }
+        }
+    }
+    int32 ai = intentNumber(i: got.renderingIntent());
+    int32 bi = intentNumber(i: want.renderingIntent());
+    if (ai != bi && (decoded || bi >= 0)) { return "rendering intent ${ai}, not ${bi}"; }
+    isize al = 0;
+    isize bl = 0;
+    uint32 asum = 0;
+    uint32 bsum = 0;
+    borrow got.iccProfile() as p { al = p.length(); asum = crc32(bytes: p); }
+    borrow want.iccProfile() as p { bl = p.length(); bsum = crc32(bytes: p); }
+    if (al != bl || asum != bsum) { return "a profile of ${al} bytes (CRC ${asum}), not ${bl} (${bsum})"; }
+    string an = got.iccProfileName();
+    string bn = want.iccProfileName();
+    if (an != bn) { return "the profile's name " + an + ", not " + bn; }
+    borrow got.exif() as p { al = p.length(); asum = crc32(bytes: p); }
+    borrow want.exif() as p { bl = p.length(); bsum = crc32(bytes: p); }
+    if (al != bl || asum != bsum) { return "Exif of ${al} bytes (CRC ${asum}), not ${bl} (${bsum})"; }
+    int64 ac = cicpNumber(c: got.cicp());
+    int64 bc = cicpNumber(c: want.cicp());
+    if (ac != bc && (decoded || bc >= 0)) { return "cICP ${ac}, not ${bc}"; }
+    uint32 am = mdcvCrc(m: got.masteringDisplay());
+    uint32 bm = mdcvCrc(m: want.masteringDisplay());
+    if (am != bm) { return "mDCV's CRC ${am}, not ${bm}"; }
+    int64 ab = lightNumber(l: got.contentLight());
+    int64 bb = lightNumber(l: want.contentLight());
+    if (ab != bb) { return "cLLI ${ab}, not ${bb}"; }
+    return "";
+}
+
 // `img` encoded with `options` into `file`: "" when it was, else why not.
 fn string encodedBy(const ref Image img, const ref EncodeOptions options, ref DynamicArray<uint8> file) {
     Result<DynamicArray<uint8>, ImageError> r = encode(image: img, options: options);
@@ -114,7 +177,10 @@ fn string roundTrip(const ref Image img, const ref EncodeOptions options, bool g
     o.keepGrey = grey;
     Result<Image, ImageError> back = decode(bytes: file.view(), options: o);
     return match (give back) {
-        case Ok(value: again): sameAs(got: again, want: img);
+        case Ok(value: again): {
+            string differs = sameAs(got: again, want: img);
+            := differs.isEmpty() ? sameMetadata(got: again, want: img, decoded: true) : copy differs;
+        }
         case Err(error: e): { string m = e.message(); := "decoded again, refused (${m})"; }
     };
 }
