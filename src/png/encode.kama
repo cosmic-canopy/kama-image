@@ -1,0 +1,238 @@
+// image::png's encoder (IMG-2; AGENTS.image.md § Decided, 4).
+//
+//   Result<DynamicArray<uint8>, ImageError> r = encode(image: img, options: EncodeOptions.archival());
+//
+// The image as it is held, at 8 or 16 bits: four channels as RGBA, two as grey with alpha and one as grey, except that
+// an opaque image's alpha channel is not written (RGB, or grey). No palette, no depth below 8 and no interlacing. Each
+// row is filtered as the options say, `Adaptive` choosing as libpng's writer chooses, and the rows are deflated at the
+// options' level into IDAT chunks of 65,536 bytes, the last no longer: the bytes depend only on the image and the
+// options. What PNG cannot hold, premultiplied alpha and float samples, is refused, never converted.
+
+import {
+    std::collections::DynamicArray, std::collections::FixedArray, std::collections::ConstView,
+    std::compress::zlib::ZlibWriter, std::io::IoError, std::io::Writer, std::io::Unfinished,
+    std::digest::crc32::crc32,
+    image::Image, image::ImageError, image::ImageErrorKind, image::PixelFormat, image::AlphaMode,
+    image::png::detail::IHDR, image::png::detail::IDAT, image::png::detail::IEND, image::png::detail::paeth,
+    EncodeOptions, Filter,
+};
+
+export { encode };
+
+// The bytes of every IDAT chunk but the last: fixed, so the chunks depend on the deflated stream alone, and a writer that
+// streams to a file could hold this much at a time and write the same bytes.
+comptime isize IDAT_BYTES = 65536;
+
+fn Result<DynamicArray<uint8>, ImageError> refuse(ImageErrorKind kind, uint32 chunk) {
+    return Result::Err(error: ImageError.make(kind: kind, at: -1, chunk: chunk));
+}
+
+fn void put32(ref DynamicArray<uint8> b, uint32 v) {
+    b.add(item: truncate<uint8>(v >> 24));
+    b.add(item: truncate<uint8>(v >> 16));
+    b.add(item: truncate<uint8>(v >> 8));
+    b.add(item: truncate<uint8>(v));
+}
+
+// One chunk onto `file`: its length, its type, its data, and the CRC-32 of its type and data. The data is at most 2³¹ − 1
+// bytes, which every caller holds to.
+fn void putChunk(ref DynamicArray<uint8> file, uint32 kind, ConstView<uint8> data) {
+    put32(b: ref file, v: cast<uint32>(data.length()));
+    isize start = file.length();
+    put32(b: ref file, v: kind);
+    file.addAll(items: data);
+    uint32 sum = crc32(bytes: file.slice(from: start, count: file.length() - start));
+    put32(b: ref file, v: sum);
+}
+
+// The deflated image data as it arrives, cut into IDAT chunks of exactly IDAT_BYTES onto the file, the last no longer.
+type resource IdatSink implements Writer {
+    DynamicArray<uint8> file;
+    FixedArray<uint8> held;
+    isize count;
+
+    public ctor make(DynamicArray<uint8> file) {
+        this.file = give file;
+        this.held = FixedArray.make(size: IDAT_BYTES);
+        this.count = 0;
+    }
+
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        isize n = bytes.length();
+        isize i = 0;
+        while (i < n) {
+            isize room = IDAT_BYTES - this.count;
+            isize step = n - i < room ? n - i : room;
+            for (isize k = 0; k < step; k = k + 1) { this.held[this.count + k] = bytes[i + k]; }
+            this.count = this.count + step;
+            i = i + step;
+            if (this.count == IDAT_BYTES) { this.emit(); }
+        }
+        return Result::Ok(value: n);
+    }
+
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+
+    fn void emit() {
+        putChunk(file: ref this.file, kind: IDAT, data: this.held.view().slice(from: 0, count: this.count));
+        this.count = 0;
+    }
+
+    // The file, with the last IDAT chunk on it.
+    public give fn DynamicArray<uint8> finish() {
+        if (this.count > 0) { this.emit(); }
+        return give this.file;
+    }
+}
+
+// Row `y` of 8-bit samples as PNG holds it: the first `written` of each pixel's `held` samples.
+fn void rowOf8(ConstView<uint8> s, isize y, isize w, isize held, isize written, ref FixedArray<uint8> row) {
+    isize from = y * w * held;
+    isize at = 0;
+    for (isize x = 0; x < w; x = x + 1) {
+        for (isize c = 0; c < written; c = c + 1) { row[at + c] = s[from + c]; }
+        at = at + written;
+        from = from + held;
+    }
+}
+
+// Row `y` of 16-bit samples as PNG holds it: the first `written` of each pixel's `held` samples, big-endian.
+fn void rowOf16(ConstView<uint16> s, isize y, isize w, isize held, isize written, ref FixedArray<uint8> row) {
+    isize from = y * w * held;
+    isize at = 0;
+    for (isize x = 0; x < w; x = x + 1) {
+        for (isize c = 0; c < written; c = c + 1) {
+            uint16 v = s[from + c];
+            row[at + c * 2] = truncate<uint8>(v >> 8);
+            row[at + c * 2 + 1] = truncate<uint8>(v);
+        }
+        at = at + written * 2;
+        from = from + held;
+    }
+}
+
+// Byte `i` of a row under filter `kind` (the PNG Third Edition, § 9.2): the byte less its prediction from the byte a whole
+// pixel to its left (`bpp` bytes), the byte above it, and the one above that one's left. The row above the first is 0.
+fn uint8 filtered(const ref FixedArray<uint8> cur, const ref FixedArray<uint8> prev, isize i, isize bpp, int32 kind) {
+    if (kind == 0) { return cur[i]; }
+    int32 x = cast<int32>(cur[i]);
+    int32 a = i >= bpp ? cast<int32>(cur[i - bpp]) : 0;
+    int32 b = cast<int32>(prev[i]);
+    if (kind == 1) { return truncate<uint8>(x - a); }
+    if (kind == 2) { return truncate<uint8>(x - b); }
+    if (kind == 3) { return truncate<uint8>(x - ((a + b) >> 1)); }
+    int32 c = i >= bpp ? cast<int32>(prev[i - bpp]) : 0;
+    return truncate<uint8>(x - paeth(a: a, b: b, c: c));
+}
+
+// What libpng's writer weighs a row filtered by `kind` at (pngwutil.c's png_write_find_filter): each filtered byte read
+// as a signed number, its size summed. It stops once the sum passes `limit`, which then cannot win.
+fn int64 cost(const ref FixedArray<uint8> cur, const ref FixedArray<uint8> prev, isize bpp, int32 kind, int64 limit) {
+    int64 sum = 0;
+    for (isize i = 0; i < cur.length(); i = i + 1) {
+        int32 v = cast<int32>(filtered(cur: cur, prev: prev, i: i, bpp: bpp, kind: kind));
+        sum = sum + cast<int64>(v < 128 ? v : 256 - v);
+        if (sum > limit) { break; }
+    }
+    return sum;
+}
+
+// The filter libpng's writer takes for a row with all five allowed: the least cost, the earlier on a tie, None first. An
+// image one row high allows only None and Sub, and one a column wide only None and Up, as libpng's png_write_start_row
+// allows them.
+fn int32 adaptive(const ref FixedArray<uint8> cur, const ref FixedArray<uint8> prev, isize bpp, isize w, isize h) {
+    int64 mins = cost(cur: cur, prev: prev, bpp: bpp, kind: 0, limit: 0x7fffffffffffffffi64);
+    int32 best = 0;
+    for (int32 kind = 1; kind <= 4; kind = kind + 1) {
+        bool allowed = kind == 1 ? w > 1 : kind == 2 ? h > 1 : w > 1 && h > 1;
+        if (!allowed) { continue; }
+        int64 sum = cost(cur: cur, prev: prev, bpp: bpp, kind: kind, limit: mins);
+        if (sum < mins) { mins = sum; best = kind; }
+    }
+    return best;
+}
+
+// A fixed filter's number in the file, or -1 for `Adaptive`.
+fn int32 kindOf(Filter filter) {
+    return match (filter) {
+        case Adaptive: -1; case None: 0; case Sub: 1; case Up: 2; case Average: 3; case Paeth: 4;
+    };
+}
+
+// Every byte onto the deflater; false when it fails, which a sink in memory never does.
+fn bool deflate(ref ZlibWriter<IdatSink> z, ConstView<uint8> bytes) {
+    isize off = 0;
+    while (off < bytes.length()) {
+        Result<isize, IoError> r = z.write(bytes: bytes.slice(from: off, count: bytes.length() - off));
+        isize n = match (r) { case Ok(value: k): k; case Err(error: e): -1; };
+        if (n <= 0) { return false; }
+        off = off + n;
+    }
+    return true;
+}
+
+fn Result<DynamicArray<uint8>, ImageError> encode(const ref Image image, const ref EncodeOptions options) {
+    // What PNG cannot hold is refused: it says neither premultiplied alpha nor floats.
+    bool unorm = match (image.format()) {
+        case R8Unorm: true; case Rg8Unorm: true; case Rgba8Unorm: true;
+        case R16Unorm: true; case Rg16Unorm: true; case Rgba16Unorm: true;
+        case Rgba16Float: false; case Rgba32Float: false;
+    };
+    if (!unorm || image.alpha() == AlphaMode::Premultiplied) { return refuse(kind: ImageErrorKind::Unsupported, chunk: 0); }
+    // Rows a partial decode never had would be written as if they were the image.
+    if (image.isPartial()) { return refuse(kind: ImageErrorKind::Truncated, chunk: 0); }
+    isize w = image.width();
+    isize h = image.height();
+    if (cast<int64>(w) > 0x7fffffffi64 || cast<int64>(h) > 0x7fffffffi64) { return refuse(kind: ImageErrorKind::Header, chunk: IHDR); }
+
+    // As held, but an opaque image's alpha channel is not written.
+    isize held = image.format().channels();
+    isize sb = image.format().sampleBytes();
+    bool alpha = (held == 2 || held == 4) && image.alpha() != AlphaMode::Opaque;
+    isize written = alpha ? held : (held == 4 ? 3 : 1);
+    uint8 colourType = written == 1 ? 0 : written == 2 ? 4 : written == 3 ? 2 : 6;
+    isize bpp = written * sb;
+    isize rowBytes = w * bpp;
+
+    DynamicArray<uint8> file = DynamicArray.empty();
+    InlineArray<uint8>#(8) signature = [137, 80, 78, 71, 13, 10, 26, 10];
+    for (isize i = 0; i < 8; i = i + 1) { file.add(item: signature[i]); }
+    DynamicArray<uint8> header = DynamicArray.empty();
+    put32(b: ref header, v: cast<uint32>(w));
+    put32(b: ref header, v: cast<uint32>(h));
+    header.add(item: truncate<uint8>(sb * 8));
+    header.add(item: colourType);
+    header.add(item: 0);   // deflate
+    header.add(item: 0);   // adaptive filtering
+    header.add(item: 0);   // no interlacing
+    putChunk(file: ref file, kind: IHDR, data: header.view());
+
+    // The rows, each filtered and deflated, onto IDAT chunks.
+    ZlibWriter<IdatSink> z = ZlibWriter.make(sink: IdatSink.make(file: give file), level: options.level);
+    FixedArray<uint8> prev = FixedArray.make(size: rowBytes);
+    FixedArray<uint8> cur = FixedArray.make(size: rowBytes);
+    FixedArray<uint8> line = FixedArray.make(size: rowBytes + 1);
+    int32 fixedKind = kindOf(filter: options.filter);
+    bool failed = false;
+    for (isize y = 0; y < h; y = y + 1) {
+        if (sb == 1) { borrow image.samples8() as s { rowOf8(s: s, y: y, w: w, held: held, written: written, row: ref cur); } }
+        else { borrow image.samples16() as s { rowOf16(s: s, y: y, w: w, held: held, written: written, row: ref cur); } }
+        int32 kind = fixedKind >= 0 ? fixedKind : adaptive(cur: cur, prev: prev, bpp: bpp, w: w, h: h);
+        line[0] = truncate<uint8>(kind);
+        for (isize i = 0; i < rowBytes; i = i + 1) { line[i + 1] = filtered(cur: cur, prev: prev, i: i, bpp: bpp, kind: kind); }
+        if (!deflate(z: ref z, bytes: line.view())) { failed = true; break; }
+        FixedArray<uint8> spare = give prev;
+        prev = give cur;
+        cur = give spare;
+    }
+    Result<IdatSink, Unfinished<ZlibWriter<IdatSink>>> done = give z.finish();
+    DynamicArray<uint8> png = DynamicArray.empty();
+    match (give done) {
+        case Ok(value: sink): { IdatSink s = give sink; png = give s.finish(); }
+        case Err(error: u): { failed = true; }
+    };
+    if (failed) { return refuse(kind: ImageErrorKind::Data, chunk: IDAT); }
+    DynamicArray<uint8> none = DynamicArray.empty();
+    putChunk(file: ref png, kind: IEND, data: none.view());
+    return Result::Ok(value: give png);
+}

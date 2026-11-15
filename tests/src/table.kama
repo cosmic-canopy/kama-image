@@ -33,6 +33,10 @@ type resource Table {
     DynamicArray<bool> greyed;
     DynamicArray<PixelFormat> greyFormats;
     DynamicArray<uint32> greyCrcs;
+    // the filter libpng's writer chose for each row of the decoded image, written as the encoder writes it, and of the
+    // grey one kept grey: the CRC-32 of the rows' filter bytes, 0 for none
+    DynamicArray<uint32> filterCrcs;
+    DynamicArray<uint32> greyFilterCrcs;
 
     public ctor make() {
         this.names = DynamicArray.empty();
@@ -60,6 +64,8 @@ type resource Table {
         this.greyed = DynamicArray.empty();
         this.greyFormats = DynamicArray.empty();
         this.greyCrcs = DynamicArray.empty();
+        this.filterCrcs = DynamicArray.empty();
+        this.greyFilterCrcs = DynamicArray.empty();
     }
 
     fn void row(string name, bool decodes, isize width, isize height, PixelFormat format, AlphaMode alpha, uint32 crc,
@@ -89,6 +95,8 @@ type resource Table {
         this.greyed.add(item: false);
         this.greyFormats.add(item: PixelFormat::R8Unorm);
         this.greyCrcs.add(item: 0);
+        this.filterCrcs.add(item: 0);
+        this.greyFilterCrcs.add(item: 0);
     }
 
     // A fixture libpng decodes: its size, format, alpha, and the CRC-32 of its samples as `Image.bytes()` gives them.
@@ -132,6 +140,21 @@ type resource Table {
         this.greyFormats[i] = format;
         this.greyCrcs[i] = crc;
     }
+
+    // The last decoded fixture's rows, as libpng's writer filters them: the CRC-32 of their filter bytes.
+    public fn void filters(string name, uint32 crc) {
+        isize i = this.names.length() - 1;
+        if (i < 0 || this.names[i] != name) { return; }
+        this.filterCrcs[i] = crc;
+    }
+    // The same, for the last grey fixture kept grey.
+    public fn void greyFilters(string name, uint32 crc) {
+        isize i = this.names.length() - 1;
+        if (i < 0 || this.names[i] != name) { return; }
+        this.greyFilterCrcs[i] = crc;
+    }
+    public const fn uint32 filtersAt(isize at) { return this.filterCrcs[at]; }
+    public const fn uint32 greyFiltersAt(isize at) { return this.greyFilterCrcs[at]; }
 
     public const fn isize count() { return this.names.length(); }
     public const fn bool greyedAt(isize at) { return this.greyed[at]; }

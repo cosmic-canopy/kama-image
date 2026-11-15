@@ -105,6 +105,58 @@ static void colour(png_structp p, png_infop info, const char *name) {
            has_exif ? (unsigned long)nexif : 0ul, has_exif ? crc_of(exif, nexif) : 0ul, cicp, mdcv, maxCll, maxFall);
 }
 
+/* The encoder's adaptive filter held to libpng's: libpng writes the decoded image as the package's encoder writes it (an
+ * opaque image without its alpha channel, 16-bit samples big-endian), with all five filters to choose from, and this
+ * reads back the filter byte libpng's png_write_find_filter chose for each row. The answer is their CRC-32. */
+struct mem { unsigned char *b; size_t n, cap; };
+static void mem_write(png_structp p, png_bytep data, size_t n) {
+    struct mem *m = png_get_io_ptr(p);
+    if (m->n + n > m->cap) { m->cap = (m->n + n) * 2; m->b = realloc(m->b, m->cap); }
+    memcpy(m->b + m->n, data, n);
+    m->n += n;
+}
+static void mem_flush(png_structp p) { (void)p; }
+static unsigned long be32(const unsigned char *b) { return ((unsigned long)b[0] << 24) | ((unsigned long)b[1] << 16) | ((unsigned long)b[2] << 8) | b[3]; }
+
+/* pix: the decoded rows, `held` channels a pixel at `depth` bits, 16-bit samples big-endian; `written` channels of each
+ * pixel are written (the first ones), as colour type `ct`. */
+static unsigned long chosen_filters(const unsigned char *pix, png_uint_32 w, png_uint_32 h, int depth, int held, int written, int ct) {
+    size_t sb = depth == 16 ? 2 : 1, in_row = (size_t)w * held * sb, out_row = (size_t)w * written * sb;
+    unsigned char *row = malloc(out_row);
+    struct mem m = { NULL, 0, 0 };
+    png_structp p = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, on_error, on_warning);
+    png_infop info = png_create_info_struct(p);
+    if (setjmp(png_jmpbuf(p))) { fprintf(stderr, "libpng refused to write: %s\n", g_err); exit(1); }
+    png_set_write_fn(p, &m, mem_write, mem_flush);
+    png_set_filter(p, PNG_FILTER_TYPE_BASE, PNG_ALL_FILTERS);
+    png_set_IHDR(p, info, w, h, depth, ct, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_BASE, PNG_FILTER_TYPE_BASE);
+    png_write_info(p, info);
+    for (png_uint_32 y = 0; y < h; y++) {
+        for (png_uint_32 x = 0; x < w; x++) memcpy(row + x * written * sb, pix + y * in_row + x * held * sb, written * sb);
+        png_write_row(p, row);
+    }
+    png_write_end(p, info);
+    png_destroy_write_struct(&p, &info);
+    /* the image data, inflated, and each row's first byte */
+    size_t raw_n = (out_row + 1) * h, at = 8;
+    unsigned char *raw = malloc(raw_n);
+    z_stream z; memset(&z, 0, sizeof z);
+    inflateInit(&z);
+    z.next_out = raw; z.avail_out = (uInt)raw_n;
+    while (at + 12 <= m.n) {
+        unsigned long len = be32(m.b + at);
+        if (memcmp(m.b + at + 4, "IDAT", 4) == 0) { z.next_in = m.b + at + 8; z.avail_in = (uInt)len; inflate(&z, Z_NO_FLUSH); }
+        at += 12 + len;
+    }
+    if (z.total_out != raw_n) { fprintf(stderr, "libpng's image data inflated to %lu bytes, not %lu\n", (unsigned long)z.total_out, (unsigned long)raw_n); exit(1); }
+    inflateEnd(&z);
+    unsigned char *kinds = malloc(h);
+    for (png_uint_32 y = 0; y < h; y++) kinds[y] = raw[y * (out_row + 1)];
+    unsigned long crc = crc_of(kinds, h);
+    free(kinds); free(raw); free(row); free(m.b);
+    return crc;
+}
+
 /* A grey file decoded as the package's `keepGrey` option decodes it: grey as one channel, grey with alpha (its own, or a
  * tRNS key's) as two, at the file's depth, low bit depths scaled to 8. */
 static void grey(const char *path) {
@@ -116,7 +168,7 @@ static void grey(const char *path) {
     if (setjmp(png_jmpbuf(p))) { fprintf(stderr, "%s: refused when kept grey\n", path); exit(1); }
     png_init_io(p, in);
     png_read_info(p, info);
-    png_uint_32 h = png_get_image_height(p, info);
+    png_uint_32 w = png_get_image_width(p, info), h = png_get_image_height(p, info);
     png_set_expand(p);
     png_set_interlace_handling(p);
     png_read_update_info(p, info);
@@ -127,9 +179,12 @@ static void grey(const char *path) {
     for (png_uint_32 y = 0; y < h; y++) rows[y] = pix + rowbytes * y;
     png_read_image(p, rows);
     png_read_end(p, NULL);
+    /* kept grey, the encoder writes one channel as grey and two as grey with alpha */
+    unsigned long chosen = chosen_filters(pix, w, h, depth, channels, channels, channels == 1 ? PNG_COLOR_TYPE_GRAY : PNG_COLOR_TYPE_GRAY_ALPHA);
     if (depth == 16) for (size_t i = 0; i < n; i += 2) { unsigned char t = pix[i]; pix[i] = pix[i + 1]; pix[i + 1] = t; }
     const char *format = channels == 1 ? (depth == 16 ? "R16Unorm" : "R8Unorm") : (depth == 16 ? "Rg16Unorm" : "Rg8Unorm");
     printf("    t.grey(name: \"%s\", format: PixelFormat::%s, crc: %luui32);\n", base(path), format, crc32(0L, pix, (uInt)n));
+    printf("    t.greyFilters(name: \"%s\", crc: %luui32);\n", base(path), chosen);
     png_destroy_read_struct(&p, &info, NULL);
     free(rows); free(pix); fclose(in);
 }
@@ -167,11 +222,14 @@ static int one(const char *path) {
     for (png_uint_32 y = 0; y < h; y++) rows[y] = pix + rowbytes * y;
     png_read_image(p, rows);
     png_read_end(p, info);   /* the chunks after the image data, eXIf among them, land in info too */
+    /* the encoder writes four channels as RGBA, or as RGB when the image is opaque */
+    unsigned long chosen = chosen_filters(pix, w, h, depth, 4, straight ? 4 : 3, straight ? PNG_COLOR_TYPE_RGB_ALPHA : PNG_COLOR_TYPE_RGB);
     if (depth == 16) for (size_t i = 0; i < n; i += 2) { unsigned char t = pix[i]; pix[i] = pix[i + 1]; pix[i + 1] = t; }
     unsigned long crc = crc32(0L, pix, (uInt)n);
     printf("    t.decoded(name: \"%s\", width: %u, height: %u, format: PixelFormat::%s, alpha: AlphaMode::%s, crc: %luui32);\n",
            base(path), (unsigned)w, (unsigned)h, depth == 16 ? "Rgba16Unorm" : "Rgba8Unorm", straight ? "Straight" : "Opaque", crc);
     colour(p, info, base(path));
+    printf("    t.filters(name: \"%s\", crc: %luui32);\n", base(path), chosen);
     if (ct == PNG_COLOR_TYPE_GRAY || ct == PNG_COLOR_TYPE_GRAY_ALPHA) grey(path);
     png_destroy_read_struct(&p, &info, NULL);
     free(rows); free(pix); fclose(in);

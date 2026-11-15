@@ -197,3 +197,9 @@ function u16s(...v) { return Buffer.concat(v.map((x) => { const b = Buffer.alloc
     write('hapng.png', colourPng({ before: [chunk('acTL', Buffer.concat([u32(2), u32(0)])), chunk('fcTL', frame(0, 8, 8))],
         after: [chunk('fcTL', frame(1, 8, 8)), chunk('fdAT', Buffer.concat([u32(2), second]))] }));
 }
+// 14. One row, and one column, whose samples halve from pixel to pixel, so that the Average filter would beat the others
+//     on every row were it allowed. libpng's writer allows only None and Sub for an image one row high, and only None and
+//     Up for one a column wide (png_write_start_row), and the encoder's adaptive filter, held to libpng's, does the same.
+const halving = (i) => 255 >> (i % 9);
+write('hrow.png', png({ w: 64, h: 1, depth: 8, colourType: 2, channels: 3, sample: (x, y, c) => halving(x + c) }));
+write('hcol.png', png({ w: 1, h: 64, depth: 8, colourType: 2, channels: 3, sample: (x, y, c) => halving(y + c) }));

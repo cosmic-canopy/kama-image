@@ -1,0 +1,23 @@
+// What a PNG encode is given besides the image (AGENTS.image.md § Decided, 4): how hard deflate works, and how each row
+// is filtered before it. A format's encoder takes its own options, so these are image::png's.
+
+import { std::compress::deflate::DeflateLevel };
+
+export { EncodeOptions, Filter };
+
+// How each row is filtered before it is compressed (the PNG Third Edition, § 7.3). `Adaptive` takes, row by row, the
+// filter libpng's writer takes; each of the others is that one filter for every row.
+type enum Filter { Adaptive, None, Sub, Up, Average, Paeth }
+
+type value EncodeOptions {
+    // std's deflate level: the bytes depend only on the image and these options, on every target, for one kama version,
+    // and with `Frozen` across kama versions too.
+    public DeflateLevel level = DeflateLevel::Level6;
+    public Filter filter = Filter::Adaptive;
+
+    // The default: fast, and the same bytes on every target for one kama version.
+    public ctor standard() { }
+    // For a file kept in a repository, such as a golden image: the same bytes across kama versions too, at about five
+    // times `standard()`'s time on a photograph.
+    public ctor archival() { this.level = DeflateLevel::Frozen; }
+}

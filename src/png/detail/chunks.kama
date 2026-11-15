@@ -1,0 +1,143 @@
+// What image::png's decoder and encoder share, in a module only image::png reaches (kama.json): the chunk types, the
+// big-endian reads, the Paeth predictor, the colour chunks a file holds, libpng's checks on an ICC profile, and the
+// colour space the colour chunks give. The decoder fills a `Chunks` from a file; the encoder fills one from an image,
+// and asks `spaceOf` whether the file it writes would decode to the image's colour space.
+
+import { std::collections::ConstView, image::ColorSpace, image::Primaries, image::Transfer, image::Chromaticities,
+         image::MasteringDisplay, image::ContentLight };
+
+export { IHDR, PLTE, IDAT, IEND, TRNS, CICP, ICCP, SRGB, GAMA, CHRM, MDCV, CLLI, EXIF, be32, be16, paeth, Chunks, iccValid,
+         spaceOf };
+
+comptime uint32 IHDR = 0x49484452ui32;
+comptime uint32 PLTE = 0x504C5445ui32;
+comptime uint32 IDAT = 0x49444154ui32;
+comptime uint32 IEND = 0x49454E44ui32;
+comptime uint32 TRNS = 0x74524E53ui32;
+comptime uint32 CICP = 0x63494350ui32;
+comptime uint32 ICCP = 0x69434350ui32;
+comptime uint32 SRGB = 0x73524742ui32;
+comptime uint32 GAMA = 0x67414D41ui32;
+comptime uint32 CHRM = 0x6348524Dui32;
+comptime uint32 MDCV = 0x6D444356ui32;
+comptime uint32 CLLI = 0x634C4C49ui32;
+comptime uint32 EXIF = 0x65584966ui32;
+
+fn uint32 be32(ConstView<uint8> b, isize at) {
+    return (cast<uint32>(b[at]) << 24) | (cast<uint32>(b[at + 1]) << 16) | (cast<uint32>(b[at + 2]) << 8) | cast<uint32>(b[at + 3]);
+}
+
+fn uint16 be16(ConstView<uint8> b, isize at) { return (cast<uint16>(b[at]) << 8) | cast<uint16>(b[at + 1]); }
+
+fn int32 paeth(int32 a, int32 b, int32 c) {
+    int32 p = a + b - c;
+    int32 pa = p > a ? p - a : a - p;
+    int32 pb = p > b ? p - b : b - p;
+    int32 pc = p > c ? p - c : c - p;
+    if (pa <= pb && pa <= pc) { return a; }
+    if (pb <= pc) { return b; }
+    return c;
+}
+
+// What a decode found in the chunks besides the image data.
+type value Chunks {
+    public bool hasPalette = false;
+    public isize paletteEntries = 0;
+    public bool hasKey = false;      // a tRNS colour key, for grey or RGB
+    public int32 keyR = 0;
+    public int32 keyG = 0;
+    public int32 keyB = 0;
+    public isize alphaEntries = 0;   // a tRNS for a palette: the entries it gives an alpha
+    public int64 firstData = -1;     // the first IDAT's byte
+    // the colour chunks kept (AGENTS.image.md § Decided, 1), each before PLTE and IDAT and once
+    public bool hasCicp = false;
+    public int32 cicpPrimaries = 0;
+    public int32 cicpTransfer = 0;
+    public int32 cicpMatrix = 0;
+    public int32 cicpRange = 0;
+    public bool hasIcc = false;
+    public bool hasSrgb = false;
+    public int32 intent = 0;
+    public bool hasGamma = false;
+    public int64 gamma = 0;
+    public bool hasChrm = false;
+    public Chromaticities chrm = Chromaticities.none();
+    public bool hasMdcv = false;
+    public MasteringDisplay mdcv = MasteringDisplay.zero();
+    public bool hasClli = false;
+    public ContentLight clli = ContentLight.make(maxCll: 0, maxFall: 0);
+    public bool hasExif = false;
+
+    public ctor none() { }
+}
+
+// Within 0.001 of a named set of chromaticities?
+fn bool near(const ref Chromaticities c, int32 wx, int32 wy, int32 rx, int32 ry, int32 gx, int32 gy, int32 bx, int32 by) {
+    InlineArray<int32>#(8) got = [c.whiteX, c.whiteY, c.redX, c.redY, c.greenX, c.greenY, c.blueX, c.blueY];
+    InlineArray<int32>#(8) want = [wx, wy, rx, ry, gx, gy, bx, by];
+    for (isize i = 0; i < 8; i = i + 1) {
+        int32 d = got[i] - want[i];
+        if (d > 100 || d < -100) { return false; }
+    }
+    return true;
+}
+
+// An ICC profile checked as libpng 1.6.50 checks one before it keeps it (its png_icc_check_header and
+// png_icc_check_tag_table): the length it declares, the tag table inside it, its signature, its rendering intent, an RGB
+// profile for a colour image and a grey one for a grey image, and not an abstract one.
+fn bool iccValid(ConstView<uint8> b, int64 colourType) {
+    isize n = b.length();
+    if (n < 132) { return false; }
+    int64 size = cast<int64>(n);
+    if (cast<int64>(be32(b: b, at: 0)) != size) { return false; }
+    if (b[8] > 3 && n % 4 != 0) { return false; }
+    int64 tags = cast<int64>(be32(b: b, at: 128));
+    if (tags > (size - 132) / 12) { return false; }
+    if (be32(b: b, at: 64) >= 0xffffui32) { return false; }
+    if (be32(b: b, at: 36) != 0x61637370ui32) { return false; }
+    bool colour = colourType == 2 || colourType == 3 || colourType == 6;
+    uint32 space = be32(b: b, at: 16);
+    if (space == 0x52474220ui32) { if (!colour) { return false; } }
+    else if (space == 0x47524159ui32) { if (colour) { return false; } }
+    else { return false; }
+    if (be32(b: b, at: 12) == 0x61627374ui32) { return false; }
+    for (int64 t = 0; t < tags; t = t + 1) {
+        isize at = 132 + cast<isize>(t) * 12;
+        int64 start = cast<int64>(be32(b: b, at: at + 4));
+        int64 len = cast<int64>(be32(b: b, at: at + 8));
+        if (start > size || len > size - start) { return false; }
+    }
+    return true;
+}
+
+// The colour space the chunks give, by the PNG Third Edition's precedence (§ 4.3): a cICP this package names (matrix
+// 0, full range, primaries 1, 9 or 12, transfer 8, 13, 16 or 18), else an ICC profile, else sRGB, else cHRM and gAMA.
+fn ColorSpace spaceOf(const ref Chunks c) {
+    if (c.hasCicp && c.cicpMatrix == 0 && c.cicpRange == 1) {
+        Primaries p = Primaries::Unspecified;
+        Transfer t = Transfer::Unspecified;
+        if (c.cicpPrimaries == 1) { p = Primaries::Bt709; }
+        if (c.cicpPrimaries == 9) { p = Primaries::Bt2020; }
+        if (c.cicpPrimaries == 12) { p = Primaries::DisplayP3; }
+        if (c.cicpTransfer == 13) { t = Transfer::Srgb; }
+        if (c.cicpTransfer == 8) { t = Transfer::Linear; }
+        if (c.cicpTransfer == 16) { t = Transfer::Pq; }
+        if (c.cicpTransfer == 18) { t = Transfer::Hlg; }
+        if (p != Primaries::Unspecified && t != Transfer::Unspecified) { return ColorSpace.make(primaries: p, transfer: t); }
+    }
+    if (c.hasIcc) { return ColorSpace.make(primaries: Primaries::IccProfile, transfer: Transfer::IccProfile); }
+    if (c.hasSrgb) { return ColorSpace.srgb(); }
+    ColorSpace s = ColorSpace.unspecified();
+    if (c.hasGamma) {
+        s.transfer = c.gamma == 100000 ? Transfer::Linear : Transfer::Gamma;
+        s.gamma = cast<uint32>(c.gamma);
+    }
+    if (c.hasChrm) {
+        s.chromaticities = c.chrm;
+        if (near(c: c.chrm, wx: 31270, wy: 32900, rx: 64000, ry: 33000, gx: 30000, gy: 60000, bx: 15000, by: 6000)) { s.primaries = Primaries::Bt709; }
+        else if (near(c: c.chrm, wx: 31270, wy: 32900, rx: 68000, ry: 32000, gx: 26500, gy: 69000, bx: 15000, by: 6000)) { s.primaries = Primaries::DisplayP3; }
+        else if (near(c: c.chrm, wx: 31270, wy: 32900, rx: 70800, ry: 29200, gx: 17000, gy: 79700, bx: 13100, by: 4600)) { s.primaries = Primaries::Bt2020; }
+        else { s.primaries = Primaries::Custom; }
+    }
+    return s;
+}

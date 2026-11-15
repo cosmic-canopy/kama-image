@@ -1,0 +1,459 @@
+// The encoder (IMG-2; AGENTS.image.md § Decided, 4): every fixture decoded, encoded and decoded again to the same image,
+// with `standard()` and `archival()`, and kept grey; the adaptive filter held to the filter libpng's writer chooses for
+// each row; each fixed filter at every pixel size the encoder writes; the colour type each image is written as; the image
+// data cut into IDAT chunks of 65,536 bytes; and what is refused.
+
+import {
+    std::fs::readFile, std::io::IoError, std::io::BufReader, std::io::SliceReader,
+    std::collections::DynamicArray, std::collections::FixedArray, std::collections::ConstView,
+    std::compress::zlib::ZlibReader, std::compress::deflate::DeflateLevel,
+    std::digest::crc32::crc32,
+    image::Image, image::ImageError, image::ImageErrorKind, image::PixelFormat, image::AlphaMode, image::ColorSpace,
+    image::DecodeOptions, image::chunkCode,
+    image::png::decode, image::png::encode, image::png::EncodeOptions, image::png::Filter,
+    Run, Table, fillExpected, formatName, alphaName,
+};
+
+export { encodeCases, chunksOf, encodedBy, sameAs };
+
+fn uint32 be32At(ConstView<uint8> b, isize at) {
+    return (cast<uint32>(b[at]) << 24) | (cast<uint32>(b[at + 1]) << 16) | (cast<uint32>(b[at + 2]) << 8) | cast<uint32>(b[at + 3]);
+}
+
+fn void verdict(ref Run run, const ref string name, const ref string why) {
+    if (why.isEmpty()) { run.pass(); } else { run.fail(name: name, why: why); }
+}
+
+// A PNG's chunks in order: each one's type, the byte its data starts at, and its length.
+fn void chunksOf(ConstView<uint8> file, ref DynamicArray<uint32> kinds, ref DynamicArray<isize> starts, ref DynamicArray<isize> lengths) {
+    isize at = 8;
+    while (at + 12 <= file.length()) {
+        isize n = cast<isize>(be32At(b: file, at: at));
+        kinds.add(item: be32At(b: file, at: at + 4));
+        starts.add(item: at + 8);
+        lengths.add(item: n);
+        at = at + 12 + n;
+    }
+}
+
+// The filter byte of each row of a PNG the encoder wrote: its image data inflated, and each row's first byte.
+fn DynamicArray<uint8> rowFiltersOf(ConstView<uint8> file) {
+    DynamicArray<uint32> kinds = DynamicArray.empty();
+    DynamicArray<isize> starts = DynamicArray.empty();
+    DynamicArray<isize> lengths = DynamicArray.empty();
+    chunksOf(file: file, kinds: ref kinds, starts: ref starts, lengths: ref lengths);
+    isize w = cast<isize>(be32At(b: file, at: 16));
+    isize h = cast<isize>(be32At(b: file, at: 20));
+    isize depth = cast<isize>(file[24]);
+    uint8 ct = file[25];
+    isize channels = ct == 0 ? 1 : ct == 4 ? 2 : ct == 2 ? 3 : 4;
+    isize rowBytes = w * channels * depth / 8;
+    DynamicArray<uint8> packed = DynamicArray.empty();
+    uint32 idat = chunkCode(text: "IDAT");
+    for (isize i = 0; i < kinds.length(); i = i + 1) {
+        if (kinds[i] == idat) { packed.addAll(items: file.slice(from: starts[i], count: lengths[i])); }
+    }
+    ZlibReader<SliceReader> z = ZlibReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: give packed)), limit: 1000000000ui64);
+    DynamicArray<uint8> raw = DynamicArray.empty();
+    FixedArray<uint8> buf = FixedArray.make(size: 4096);
+    while (true) {
+        Result<isize, IoError> r = z.read(into: buf.viewMut());
+        isize m = match (r) { case Ok(value: v): v; case Err(error: e): -1; };
+        if (m <= 0) { break; }
+        raw.addAll(items: buf.view().slice(from: 0, count: m));
+    }
+    DynamicArray<uint8> picked = DynamicArray.empty();
+    for (isize y = 0; y < h; y = y + 1) {
+        isize at = y * (rowBytes + 1);
+        if (at < raw.length()) { picked.add(item: raw[at]); }
+    }
+    return give picked;
+}
+
+// One image's size, format, alpha and samples against another's: "" when they match, else what differs.
+fn string sameAs(const ref Image got, const ref Image want) {
+    isize gw = got.width();
+    isize gh = got.height();
+    isize ww = want.width();
+    isize wh = want.height();
+    if (gw != ww || gh != wh) { return "size ${gw}x${gh}, not ${ww}x${wh}"; }
+    if (got.format() != want.format()) {
+        string g = formatName(f: got.format());
+        string x = formatName(f: want.format());
+        return "format ${g}, not ${x}";
+    }
+    if (got.alpha() != want.alpha()) {
+        string g = alphaName(a: got.alpha());
+        string x = alphaName(a: want.alpha());
+        return "alpha ${g}, not ${x}";
+    }
+    uint32 a = 0;
+    uint32 b = 0;
+    borrow got.bytes() as v { a = crc32(bytes: v); }
+    borrow want.bytes() as v { b = crc32(bytes: v); }
+    if (a != b) { return "samples' CRC-32 ${a}, not ${b}"; }
+    return "";
+}
+
+// `img` encoded with `options` into `file`: "" when it was, else why not.
+fn string encodedBy(const ref Image img, const ref EncodeOptions options, ref DynamicArray<uint8> file) {
+    Result<DynamicArray<uint8>, ImageError> r = encode(image: img, options: options);
+    string why = "";
+    match (give r) {
+        case Ok(value: bytes): { file = give bytes; }
+        case Err(error: e): { string m = e.message(); why = "refused (${m})"; }
+    };
+    return why;
+}
+
+// `img` encoded with `options` into `file`, and decoded again, kept grey or not: "" when it comes back the same image.
+fn string roundTrip(const ref Image img, const ref EncodeOptions options, bool grey, ref DynamicArray<uint8> file) {
+    string why = encodedBy(img: img, options: options, file: ref file);
+    if (!why.isEmpty()) { return why; }
+    DecodeOptions o = DecodeOptions.defaults();
+    o.keepGrey = grey;
+    Result<Image, ImageError> back = decode(bytes: file.view(), options: o);
+    return match (give back) {
+        case Ok(value: again): sameAs(got: again, want: img);
+        case Err(error: e): { string m = e.message(); := "decoded again, refused (${m})"; }
+    };
+}
+
+// The rows' filter bytes of `file` against libpng's choice for the same rows: "" when they match.
+fn string filtersAs(const ref DynamicArray<uint8> file, uint32 want) {
+    DynamicArray<uint8> picked = rowFiltersOf(file: file.view());
+    uint32 got = crc32(bytes: picked.view());
+    if (got != want) { return "the rows' filters' CRC-32 ${got}, libpng's ${want}"; }
+    return "";
+}
+
+// Every fixture libpng decodes: decoded, encoded with standard() and archival(), and decoded again to the same image,
+// and its rows filtered as libpng's writer filters them; then the same kept grey.
+fn void fixtureCases(ref Run run) {
+    Table t = Table.make();
+    fillExpected(t: ref t);
+    for (isize i = 0; i < t.count(); i = i + 1) {
+        if (!t.decodesAt(at: i)) { continue; }
+        string name = t.nameAt(at: i);
+        string dir = name.startsWith(prefix: "h") ? "crafted" : "pngsuite";
+        string path = "fixtures/${dir}/${name}";
+        Result<DynamicArray<uint8>, IoError> read = readFile(path: path);
+        if (read.isErr()) { run.fail(name: name, why: "cannot read ${path}"); continue; }
+        DynamicArray<uint8> src = match (give read) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+        Result<Image, ImageError> d = decode(bytes: src.view(), options: DecodeOptions.defaults());
+        match (give d) {
+            case Ok(value: img): {
+                DynamicArray<uint8> file = DynamicArray.empty();
+                string why = roundTrip(img: img, options: EncodeOptions.standard(), grey: false, file: ref file);
+                verdict(run: ref run, name: name + ", encoded", why: why);
+                if (why.isEmpty()) {
+                    string filtered = filtersAs(file: file, want: t.filtersAt(at: i));
+                    verdict(run: ref run, name: name + ", its filters", why: filtered);
+                }
+                DynamicArray<uint8> kept = DynamicArray.empty();
+                string archived = roundTrip(img: img, options: EncodeOptions.archival(), grey: false, file: ref kept);
+                verdict(run: ref run, name: name + ", encoded with archival()", why: archived);
+            }
+            case Err(error: e): { string m = e.message(); run.fail(name: name, why: "not decoded (${m})"); }
+        };
+        if (!t.greyedAt(at: i)) { continue; }
+        DecodeOptions o = DecodeOptions.defaults();
+        o.keepGrey = true;
+        Result<Image, ImageError> g = decode(bytes: src.view(), options: o);
+        match (give g) {
+            case Ok(value: img): {
+                DynamicArray<uint8> file = DynamicArray.empty();
+                string why = roundTrip(img: img, options: EncodeOptions.standard(), grey: true, file: ref file);
+                verdict(run: ref run, name: name + ", kept grey and encoded", why: why);
+                if (why.isEmpty()) {
+                    string filtered = filtersAs(file: file, want: t.greyFiltersAt(at: i));
+                    verdict(run: ref run, name: name + ", kept grey, its filters", why: filtered);
+                }
+            }
+            case Err(error: e): { string m = e.message(); run.fail(name: name, why: "not decoded kept grey (${m})"); }
+        };
+    }
+}
+
+// An image of `format` and `alpha`, `w` × `h`, whose samples differ from their neighbours, so each filter writes other
+// bytes; an opaque image's alpha samples are `opaqueAlpha`, scaled to the format.
+fn Result<Image, ImageError> patterned(PixelFormat format, AlphaMode alpha, isize w, isize h, int64 opaqueAlpha) {
+    isize ch = format.channels();
+    isize n = w * h * ch;
+    bool hasAlpha = ch == 2 || ch == 4;
+    if (format.sampleBytes() == 1) {
+        FixedArray<uint8> s = FixedArray.make(size: n);
+        for (isize i = 0; i < n; i = i + 1) {
+            int64 c = cast<int64>(i % ch);
+            int64 p = cast<int64>(i / ch);
+            int64 x = p % cast<int64>(w);
+            int64 y = p / cast<int64>(w);
+            bool isAlpha = hasAlpha && c == cast<int64>(ch - 1);
+            s[i] = isAlpha && alpha == AlphaMode::Opaque ? truncate<uint8>(opaqueAlpha) : truncate<uint8>(x * 37 + y * 101 + c * 59 + x * y * 7);
+        }
+        return Image.fromSamples8(width: w, height: h, format: format, alpha: alpha, colorSpace: ColorSpace.unspecified(), samples: give s);
+    }
+    FixedArray<uint16> s = FixedArray.make(size: n);
+    for (isize i = 0; i < n; i = i + 1) {
+        int64 c = cast<int64>(i % ch);
+        int64 p = cast<int64>(i / ch);
+        int64 x = p % cast<int64>(w);
+        int64 y = p / cast<int64>(w);
+        bool isAlpha = hasAlpha && c == cast<int64>(ch - 1);
+        s[i] = isAlpha && alpha == AlphaMode::Opaque ? truncate<uint16>(opaqueAlpha * 257) : truncate<uint16>(x * 7919 + y * 4099 + c * 13 + x * y * 31);
+    }
+    return Image.fromSamples16(width: w, height: h, format: format, alpha: alpha, colorSpace: ColorSpace.unspecified(), samples: give s);
+}
+
+fn string filterName(Filter f) {
+    return match (f) {
+        case Adaptive: "Adaptive"; case None: "None"; case Sub: "Sub"; case Up: "Up"; case Average: "Average"; case Paeth: "Paeth";
+    };
+}
+
+// The formats and alpha modes the encoder writes, at every pixel size: 1, 2, 3, 4, 6 and 8 bytes.
+fn PixelFormat formatAt(isize k) {
+    InlineArray<PixelFormat>#(8) v = [PixelFormat::R8Unorm, PixelFormat::Rg8Unorm, PixelFormat::Rgba8Unorm, PixelFormat::Rgba8Unorm,
+        PixelFormat::R16Unorm, PixelFormat::Rg16Unorm, PixelFormat::Rgba16Unorm, PixelFormat::Rgba16Unorm];
+    return v[k];
+}
+fn AlphaMode alphaAt(isize k) {
+    InlineArray<AlphaMode>#(8) v = [AlphaMode::Opaque, AlphaMode::Straight, AlphaMode::Opaque, AlphaMode::Straight,
+        AlphaMode::Opaque, AlphaMode::Straight, AlphaMode::Opaque, AlphaMode::Straight];
+    return v[k];
+}
+
+// Each fixed filter is every row's filter, at every pixel size, on one row and one column too, and decodes exactly.
+fn void filterCases(ref Run run) {
+    InlineArray<Filter>#(5) fixed = [Filter::None, Filter::Sub, Filter::Up, Filter::Average, Filter::Paeth];
+    InlineArray<isize>#(3) widths = [13, 13, 1];
+    InlineArray<isize>#(3) heights = [7, 1, 7];
+    for (isize k = 0; k < 8; k = k + 1) {
+        for (isize f = 0; f < 5; f = f + 1) {
+            for (isize sz = 0; sz < 3; sz = sz + 1) {
+                isize w = widths[sz];
+                isize h = heights[sz];
+                string fname = filterName(f: fixed[f]);
+                string format = formatName(f: formatAt(k: k));
+                string alpha = alphaName(a: alphaAt(k: k));
+                string name = fname + ", " + format + " " + alpha + ", ${w}x${h}";
+                Result<Image, ImageError> made = patterned(format: formatAt(k: k), alpha: alphaAt(k: k), w: w, h: h, opaqueAlpha: 255);
+                match (give made) {
+                    case Ok(value: img): {
+                        EncodeOptions o = EncodeOptions.standard();
+                        o.filter = fixed[f];
+                        DynamicArray<uint8> file = DynamicArray.empty();
+                        string why = roundTrip(img: img, options: o, grey: true, file: ref file);
+                        if (why.isEmpty()) {
+                            DynamicArray<uint8> picked = rowFiltersOf(file: file.view());
+                            if (picked.length() != h) { isize got = picked.length(); why = "${got} rows' filters"; }
+                            for (isize y = 0; y < picked.length(); y = y + 1) {
+                                if (cast<isize>(picked[y]) != f) { uint8 got = picked[y]; why = "row ${y}'s filter is ${got}"; }
+                            }
+                        }
+                        verdict(run: ref run, name: name, why: why);
+                    }
+                    case Err(error: e): { string m = e.message(); run.fail(name: name, why: "not made (${m})"); }
+                };
+            }
+        }
+    }
+}
+
+// The colour type and depth each image is written as: as it is held, but an opaque image without its alpha channel.
+fn void layoutCases(ref Run run) {
+    InlineArray<PixelFormat>#(11) formats = [PixelFormat::R8Unorm, PixelFormat::R8Unorm, PixelFormat::Rg8Unorm, PixelFormat::Rg8Unorm,
+        PixelFormat::Rgba8Unorm, PixelFormat::Rgba8Unorm, PixelFormat::R16Unorm, PixelFormat::Rg16Unorm, PixelFormat::Rg16Unorm,
+        PixelFormat::Rgba16Unorm, PixelFormat::Rgba16Unorm];
+    InlineArray<AlphaMode>#(11) alphas = [AlphaMode::Opaque, AlphaMode::Straight, AlphaMode::Straight, AlphaMode::Opaque,
+        AlphaMode::Opaque, AlphaMode::Straight, AlphaMode::Opaque, AlphaMode::Straight, AlphaMode::Opaque,
+        AlphaMode::Opaque, AlphaMode::Straight];
+    InlineArray<uint8>#(11) types = [0, 0, 4, 0, 2, 6, 0, 4, 0, 2, 6];
+    InlineArray<uint8>#(11) depths = [8, 8, 8, 8, 8, 8, 16, 16, 16, 16, 16];
+    for (isize k = 0; k < 11; k = k + 1) {
+        string format = formatName(f: formats[k]);
+        string alpha = alphaName(a: alphas[k]);
+        string name = "written as, " + format + " " + alpha;
+        Result<Image, ImageError> made = patterned(format: formats[k], alpha: alphas[k], w: 5, h: 3, opaqueAlpha: 7);
+        match (give made) {
+            case Ok(value: img): {
+                DynamicArray<uint8> file = DynamicArray.empty();
+                string why = encodedBy(img: img, options: EncodeOptions.standard(), file: ref file);
+                if (why.isEmpty()) {
+                    uint8 ct = file[25];
+                    uint8 depth = file[24];
+                    uint8 wantType = types[k];
+                    uint8 wantDepth = depths[k];
+                    if (ct != wantType || depth != wantDepth) { why = "colour type ${ct} at ${depth} bits, not ${wantType} at ${wantDepth}"; }
+                }
+                verdict(run: ref run, name: name, why: why);
+            }
+            case Err(error: e): { string m = e.message(); run.fail(name: name, why: "not made (${m})"); }
+        };
+    }
+    // An opaque image's alpha samples are not written, whatever they hold: it decodes with every alpha the largest
+    // value, and its colour as it was.
+    {
+        Result<Image, ImageError> made = patterned(format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, w: 5, h: 3, opaqueAlpha: 7);
+        Result<Image, ImageError> want = patterned(format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, w: 5, h: 3, opaqueAlpha: 255);
+        string why = "not made";
+        match (give made) {
+            case Ok(value: img): {
+                match (give want) {
+                    case Ok(value: expected): {
+                        DynamicArray<uint8> file = DynamicArray.empty();
+                        why = encodedBy(img: img, options: EncodeOptions.standard(), file: ref file);
+                        if (why.isEmpty()) {
+                            Result<Image, ImageError> back = decode(bytes: file.view(), options: DecodeOptions.defaults());
+                            why = match (give back) {
+                                case Ok(value: again): sameAs(got: again, want: expected);
+                                case Err(error: e): { string m = e.message(); := "decoded again, refused (${m})"; }
+                            };
+                        }
+                    }
+                    case Err(error: e): { }
+                };
+            }
+            case Err(error: e): { discard(made: give want); }
+        };
+        verdict(run: ref run, name: "an opaque image's alpha is not written", why: why);
+    }
+    // An opaque grey image with alpha is written as grey: kept grey, it decodes to its grey channel alone.
+    {
+        Result<Image, ImageError> made = patterned(format: PixelFormat::Rg16Unorm, alpha: AlphaMode::Opaque, w: 5, h: 3, opaqueAlpha: 7);
+        string why = "not made";
+        match (give made) {
+            case Ok(value: img): {
+                DynamicArray<uint8> file = DynamicArray.empty();
+                why = encodedBy(img: img, options: EncodeOptions.standard(), file: ref file);
+                if (why.isEmpty()) {
+                    DecodeOptions o = DecodeOptions.defaults();
+                    o.keepGrey = true;
+                    Result<Image, ImageError> back = decode(bytes: file.view(), options: o);
+                    match (give back) {
+                        case Ok(value: again): {
+                            if (again.format() != PixelFormat::R16Unorm) { why = "not decoded as one channel"; }
+                            else {
+                                borrow again.samples16() as g {
+                                    borrow img.samples16() as s {
+                                        for (isize i = 0; i < g.length(); i = i + 1) { if (g[i] != s[i * 2]) { why = "sample ${i} differs"; } }
+                                    }
+                                }
+                            }
+                        }
+                        case Err(error: e): { string m = e.message(); why = "decoded again, refused (${m})"; }
+                    };
+                }
+            }
+            case Err(error: e): { }
+        };
+        verdict(run: ref run, name: "an opaque grey image with alpha is written as grey", why: why);
+    }
+}
+
+// Noise the deflater cannot shrink: an RGBA image of 256 × 256 from a 32-bit xorshift. Its image data is cut into IDAT
+// chunks of exactly 65,536 bytes, all together, the last no longer, and decodes exactly.
+fn void idatCases(ref Run run) {
+    isize n = 256 * 256 * 4;
+    FixedArray<uint8> s = FixedArray.make(size: n);
+    uint64 state = 2463534242ui64;
+    for (isize i = 0; i < n; i = i + 1) {
+        state = (state ^ (state << 13)) & 0xffffffffui64;
+        state = state ^ (state >> 17);
+        state = (state ^ (state << 5)) & 0xffffffffui64;
+        s[i] = truncate<uint8>(state >> 24);
+    }
+    Result<Image, ImageError> made = Image.fromSamples8(width: 256, height: 256, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Straight,
+                                                        colorSpace: ColorSpace.unspecified(), samples: give s);
+    match (give made) {
+        case Ok(value: img): {
+            DynamicArray<uint8> file = DynamicArray.empty();
+            string why = roundTrip(img: img, options: EncodeOptions.standard(), grey: false, file: ref file);
+            verdict(run: ref run, name: "noise, encoded", why: why);
+            DynamicArray<uint32> kinds = DynamicArray.empty();
+            DynamicArray<isize> starts = DynamicArray.empty();
+            DynamicArray<isize> lengths = DynamicArray.empty();
+            chunksOf(file: file.view(), kinds: ref kinds, starts: ref starts, lengths: ref lengths);
+            uint32 idat = chunkCode(text: "IDAT");
+            isize first = -1;
+            isize last = -1;
+            isize count = 0;
+            for (isize i = 0; i < kinds.length(); i = i + 1) {
+                if (kinds[i] == idat) { if (first < 0) { first = i; } last = i; count = count + 1; }
+            }
+            string split = "";
+            if (count < 4) { split = "${count} IDAT chunks, where the data needs at least 4"; }
+            else if (last - first + 1 != count) { split = "the IDAT chunks are not all together"; }
+            else {
+                for (isize i = first; i < last; i = i + 1) {
+                    isize len = lengths[i];
+                    if (len != 65536) { split = "IDAT chunk ${i} holds ${len} bytes, not 65,536"; }
+                }
+                isize tail = lengths[last];
+                if (tail < 1 || tail > 65536) { split = "the last IDAT chunk holds ${tail} bytes"; }
+            }
+            verdict(run: ref run, name: "noise, its IDAT chunks of 65,536 bytes", why: split);
+        }
+        case Err(error: e): { string m = e.message(); run.fail(name: "noise", why: "not made (${m})"); }
+    };
+}
+
+fn void discard(Result<Image, ImageError> made) { }
+
+// `img` refused with `want`: "" when it is.
+fn string refusedAs(const ref Image img, ImageErrorKind want) {
+    Result<DynamicArray<uint8>, ImageError> r = encode(image: img, options: EncodeOptions.standard());
+    return match (give r) {
+        case Ok(value: bytes): "encoded";
+        case Err(error: e): { string m = e.message(); string w = want.name(); := e.kind() == want ? "" : "refused as ${m}, not ${w}"; }
+    };
+}
+
+// What PNG cannot hold is refused, never converted: premultiplied alpha, floats, and an image whose rows are missing.
+fn void refusalCases(ref Run run) {
+    {
+        Result<Image, ImageError> made = patterned(format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Premultiplied, w: 3, h: 2, opaqueAlpha: 255);
+        string why = match (give made) { case Ok(value: img): refusedAs(img: img, want: ImageErrorKind::Unsupported); case Err(error: e): "not made"; };
+        verdict(run: ref run, name: "premultiplied alpha, refused", why: why);
+    }
+    {
+        FixedArray<uint16> s = FixedArray.make(size: 3 * 2 * 4);
+        Result<Image, ImageError> made = Image.fromSamples16(width: 3, height: 2, format: PixelFormat::Rgba16Float, alpha: AlphaMode::Straight,
+                                                             colorSpace: ColorSpace.unspecified(), samples: give s);
+        string why = match (give made) { case Ok(value: img): refusedAs(img: img, want: ImageErrorKind::Unsupported); case Err(error: e): "not made"; };
+        verdict(run: ref run, name: "half floats, refused", why: why);
+    }
+    {
+        FixedArray<float32> s = FixedArray.make(size: 3 * 2 * 4);
+        Result<Image, ImageError> made = Image.fromSamplesF32(width: 3, height: 2, format: PixelFormat::Rgba32Float, alpha: AlphaMode::Straight,
+                                                              colorSpace: ColorSpace.unspecified(), samples: give s);
+        string why = match (give made) { case Ok(value: img): refusedAs(img: img, want: ImageErrorKind::Unsupported); case Err(error: e): "not made"; };
+        verdict(run: ref run, name: "floats, refused", why: why);
+    }
+    {
+        Result<Image, ImageError> made = patterned(format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Straight, w: 3, h: 2, opaqueAlpha: 255);
+        string why = match (give made) {
+            case Ok(value: img): { Image cut = give img; cut.setPartial(partial: true); := refusedAs(img: cut, want: ImageErrorKind::Truncated); }
+            case Err(error: e): "not made";
+        };
+        verdict(run: ref run, name: "an image with rows missing, refused", why: why);
+    }
+}
+
+fn void optionCases(ref Run run) {
+    EncodeOptions s = EncodeOptions.standard();
+    EncodeOptions a = EncodeOptions.archival();
+    verdict(run: ref run, name: "standard() is Level6, adaptive",
+            why: s.level == DeflateLevel::Level6 && s.filter == Filter::Adaptive ? "" : "it is not");
+    verdict(run: ref run, name: "archival() is Frozen, adaptive",
+            why: a.level == DeflateLevel::Frozen && a.filter == Filter::Adaptive ? "" : "it is not");
+}
+
+fn void encodeCases(ref Run run) {
+    fixtureCases(run: ref run);
+    filterCases(run: ref run);
+    layoutCases(run: ref run);
+    idatCases(run: ref run);
+    refusalCases(run: ref run);
+    optionCases(run: ref run);
+}
