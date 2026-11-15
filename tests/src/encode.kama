@@ -4,7 +4,7 @@
 // data cut into IDAT chunks of 65,536 bytes; and what is refused.
 
 import {
-    std::fs::readFile, std::io::IoError, std::io::BufReader, std::io::SliceReader,
+    std::fs::readFile, std::fs::writeFile, std::io::IoError, std::io::BufReader, std::io::SliceReader,
     std::collections::DynamicArray, std::collections::FixedArray, std::collections::ConstView,
     std::compress::zlib::ZlibReader, std::compress::deflate::DeflateLevel,
     std::digest::crc32::crc32,
@@ -14,7 +14,7 @@ import {
     Run, Table, fillExpected, formatName, alphaName, intentNumber, mdcvCrc, spaceName,
 };
 
-export { encodeCases, chunksOf, encodedBy, sameAs, sameMetadata, patterned };
+export { encodeCases, chunksOf, encodedBy, sameAs, sameMetadata, patterned, writeEncoded };
 
 fn uint32 be32At(ConstView<uint8> b, isize at) {
     return (cast<uint32>(b[at]) << 24) | (cast<uint32>(b[at + 1]) << 16) | (cast<uint32>(b[at + 2]) << 8) | cast<uint32>(b[at + 3]);
@@ -513,6 +513,43 @@ fn void optionCases(ref Run run) {
             why: s.level == DeflateLevel::Level6 && s.filter == Filter::Adaptive ? "" : "it is not");
     verdict(run: ref run, name: "archival() is Frozen, adaptive",
             why: a.level == DeflateLevel::Frozen && a.filter == Filter::Adaptive ? "" : "it is not");
+}
+
+// For tools/reference/encoded.sh (`imagetests --encoded`, natively): each fixture libpng decodes, decoded and encoded with
+// archival(), written to out/encoded/plain/, and each grey one decoded kept grey and encoded, to out/encoded/grey/, for
+// libpng to read. The script makes the folders.
+fn void writeEncoded(ref Run run) {
+    Table t = Table.make();
+    fillExpected(t: ref t);
+    for (isize i = 0; i < t.count(); i = i + 1) {
+        if (!t.decodesAt(at: i)) { continue; }
+        string name = t.nameAt(at: i);
+        string dir = name.startsWith(prefix: "h") ? "crafted" : "pngsuite";
+        string path = "fixtures/${dir}/${name}";
+        Result<DynamicArray<uint8>, IoError> read = readFile(path: path);
+        if (read.isErr()) { run.fail(name: name, why: "cannot read ${path}"); continue; }
+        DynamicArray<uint8> src = match (give read) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+        for (int32 pass = 0; pass < 2; pass = pass + 1) {
+            if (pass == 1 && !t.greyedAt(at: i)) { continue; }
+            DecodeOptions o = DecodeOptions.defaults();
+            o.keepGrey = pass == 1;
+            string target = pass == 1 ? "out/encoded/grey/${name}" : "out/encoded/plain/${name}";
+            Result<Image, ImageError> d = decode(bytes: src.view(), options: o);
+            string why = match (give d) {
+                case Ok(value: img): {
+                    DynamicArray<uint8> file = DynamicArray.empty();
+                    string w = encodedBy(img: img, options: EncodeOptions.archival(), file: ref file);
+                    if (w.isEmpty()) {
+                        Result<isize, IoError> wrote = writeFile(path: target, bytes: file);
+                        if (wrote.isErr()) { w = "cannot write " + target; }
+                    }
+                    := give w;
+                }
+                case Err(error: e): "not decoded";
+            };
+            verdict(run: ref run, name: name, why: why);
+        }
+    }
 }
 
 fn void encodeCases(ref Run run) {

@@ -15,7 +15,8 @@ import {
     image::Primaries, image::Transfer, image::RenderingIntent, image::Cicp, image::MasteringDisplay, image::ContentLight,
     image::DecodeOptions,
     image::png::decode,
-    Table, fillExpected, strictCases, colourCases, convertCases, partialCases, sweep, encodeCases, encodeColourCases,
+    Table, fillExpected, strictCases, colourCases, convertCases, partialCases, sweep, encodeCases, encodeColourCases, promiseCases,
+    writeEncoded,
 };
 
 export { Run, formatName, alphaName, intentNumber, mdcvCrc };
@@ -250,6 +251,14 @@ fn uint8 main() {
         println(s: "image tests: ${swept} cases, ${lost} failed");
         return lost == 0 ? 0 : 1;
     }
+    if (named(flag: "--encoded")) {
+        // for tools/reference/encoded.sh: every fixture encoded, written for libpng to read
+        writeEncoded(run: ref run);
+        int32 wrote = run.count();
+        int32 lost = run.failures();
+        println(s: "image tests: ${wrote} cases, ${lost} failed");
+        return lost == 0 ? 0 : 1;
+    }
     fixtures(run: ref run);
     strictCases(run: ref run);
     colourCases(run: ref run);
@@ -257,6 +266,7 @@ fn uint8 main() {
     partialCases(run: ref run);
     encodeCases(run: ref run);
     encodeColourCases(run: ref run);
+    promiseCases(run: ref run);
     int32 n = run.count();
     int32 f = run.failures();
     println(s: "image tests: ${n} cases, ${f} failed");

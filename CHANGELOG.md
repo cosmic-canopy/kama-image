@@ -23,6 +23,16 @@ package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Image.convert(to:)`: another pixel format, sample by sample, with the metadata kept.
 - `DecodeOptions.partial` and `Image.isPartial()`: the rows a file that ends early holds, for a viewer.
 - The tests' sweep: every single-bit flip and every truncation of every fixture, in debug and in release.
+- `image::png::encode` with `EncodeOptions.standard()` and `archival()`, and `Filter`: the image as it is held at 8 or
+  16 bits (an opaque image without its alpha), libpng's adaptive filter, IDAT chunks of 65,536 bytes, and the colour
+  chunks that decode back to the image's colour space with everything it carries; the same bytes on every target, and
+  with `archival()` across kama versions.
+- `ImageErrorKind::Metadata`: metadata the format cannot hold, or that contradicts the image's colour space.
+
+### Fixed
+
+- The decoder drops a cICP whose matrix is not 0, and keeps a good colour chunk after a broken one of its type, as
+  libpng does.
 
 ### Notes
 

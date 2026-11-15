@@ -16,15 +16,9 @@ and the history is the git log.
 **The order is the owner's** (2026-11-14, AGENTS.image.md § Decided, 3): "we roadmap them all and do what you recommend
 now". Every format is a module a program imports, so a page carries only the formats it uses.
 
-## NOW: PNG, whole
+## NOW: PNG's fuzzing
 
-PNG decoding is built: [SPEC.md](SPEC.md) § PNG.
-
-| id | item | why |
-|---|---|---|
-| IMG-2 | **PNG encoding**: `standard()` and `archival()`, the filters and the colour chunks, the same bytes on every leg | [detail](ROADMAP_DETAIL.md#png-encode) |
-
-## NEXT
+PNG is whole, decoded and encoded: [SPEC.md](SPEC.md) § PNG and § PNG encoding.
 
 | id | item | why |
 |---|---|---|

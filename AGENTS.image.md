@@ -23,9 +23,10 @@ image format). Its first users:
 ## Where things stand
 
 **Seeded on 2026-11-14 with `kama seed` on kama 0.9.947+gf919c10e; built on 0.9.949, kyoten's pin.** IMG-1, PNG
-decoding, is built ([SPEC.md](SPEC.md)): the decode, the colour chunks, the sweep in the gate, `keepGrey`, `partial` and
-`convert(to:)`. IMG-2, PNG encoding, is next ([ROADMAP_DETAIL.md](ROADMAP_DETAIL.md#png-encode)). Whether it is a first-party
-package, as kama ruled `@kama/graphics` one (KR-309), is kama's to rule; the owner relays the question.
+decoding, and IMG-2, PNG encoding, are built ([SPEC.md](SPEC.md)): PNG is whole. IMG-3, coverage-guided fuzzing, is
+next in this package ([ROADMAP.md](ROADMAP.md)), and its first user, `@kama/graphics`' goldens, can write and read
+PNGs. Whether it is a first-party package, as kama ruled `@kama/graphics` one (KR-309), is kama's to rule; the owner
+relays the question.
 
 **A short design pass comes before any code,** as `@kama/graphics`' and `@kama/audio`'s did. Each question is measured
 first where it can be, then asked of the owner in full: the problem, an example, the options and the production
@@ -136,6 +137,47 @@ evidence is [RESEARCH.md](RESEARCH.md), its probes in `.scratch/img-probe-*/`. A
      - On a 1080p photograph, `Frozen` takes 3.9 s against `Level6`'s 0.8 s, which is too slow for a screenshot's
        default.
      - A browser's encoder keeps neither promise.
+   - **Settled while building IMG-2, the same day, under the owner's word above,** each from the PNG Third Edition and
+     libpng 1.6.50's writer (pngwrite.c, pngwutil.c, pngset.c), and reported to the owner at the session's end:
+     1. **The colour type is the image's own, except that an opaque image's alpha channel is not written.** Four channels
+        are RGBA, or RGB when `Opaque`; two are grey with alpha, or grey when `Opaque`; one is grey. The depth is 8 or 16,
+        16-bit samples big-endian. There is no palette, no depth below 8 and no Adam7.
+        - An opaque image then decodes back as `Opaque`, which an RGBA file would not. libpng's simplified writer does
+          the same.
+        - Making a file smaller by its content (a palette, a lower depth, grey from equal RGB) is left for a later option,
+          since it changes what a decode gives back.
+     2. **What PNG cannot hold is refused, never converted:**
+        - premultiplied alpha and float samples are `Unsupported` (`convert(to:)` gives a unorm format first);
+        - an image with rows missing (`isPartial()`) is `Truncated`, since its zeros would be written as the image;
+        - a width or height past 2³¹ − 1 is `Header`. No test reaches this, since such an image is 2 GiB of samples; it is
+          kept because a cast past it would end the program;
+        - metadata PNG cannot hold, or that contradicts the colour space, is `Metadata`, a new kind, with the chunk it is
+          about.
+     3. **The colour chunks: a file decodes back to the same colour space, with everything the image carried.** In
+        libpng's order: `IHDR`, `cLLI`, `mDCV`, `cICP`, `iCCP`, `sRGB`, `gAMA`, `cHRM`, `eXIf`, `IDAT`, `IEND`.
+        - **What the image carries is written back as it is:** its cICP (refused when its matrix is not 0, as the decoder
+          now drops one), its profile (its name held to the PNG Third Edition's 1 to 79 printable Latin-1 characters with
+          no leading, trailing or double space, where libpng's writer rewrites a bad name; the profile held to the
+          decoder's libpng checks, an RGB profile on colour and a grey one on grey, on the colour type written), its
+          rendering intent as `sRGB`, its Exif (refused without its byte-order mark), and its mastering display and
+          light levels.
+        - **Where nothing carried gives the colour space, it is written:** sRGB as `sRGB`, with the gAMA of 45455 and the
+          cHRM of BT.709 the Third Edition recommends beside it (§ 11.3.2.5, Table 17, and libpng's
+          `png_set_sRGB_gAMA_and_cHRM`); another space cICP names as a `cICP`; a space a gAMA and cHRM gave as those, with
+          their values; nothing for `Unspecified`.
+        - **The check is the decoder's own precedence:** the encoder fills the same record of chunks the decoder fills
+          and asks the decoder's `spaceOf` what it gives (`image::png::detail`). A colour space the chunks cannot give
+          back is refused: an ICC colour space without a profile, sRGB beside a profile or a cICP that names another
+          space, sRGB's curve with no primaries, a gamma of 0, custom primaries without chromaticities.
+     4. **`tIME` and text are never written,** since `Image` has no text yet.
+     5. **IDAT chunks of 65,536 bytes, the last no longer.** libpng writes 8,192 (its `PNG_ZBUF_SIZE`), the png crate one
+        chunk up to 2³¹ − 1, and Pillow max(65,536, 4 × width). A fixed size keeps a later streaming encode byte for byte
+        the same, holding 64 KiB rather than the whole stream, at 12 bytes in 64 KiB.
+     6. **`Adaptive` is libpng 1.6.50's `png_write_find_filter`:** each filtered byte read as a signed number, its size
+        summed; None, Sub, Up, Average and Paeth tried in that order, the earlier kept on a tie; an image one row high
+        allowed only None and Sub, and one a column wide only None and Up (`png_write_start_row`). The sums are 64-bit, so
+        libpng's 32-bit guard, which keeps only one filter past 33 MB a row, is not copied, and the bytes stay the same on
+        every target. Held to libpng's choice on every fixture.
 5. **Decided on 2026-11-14: PNG is decoded and encoded by kama on every leg, and the browser's own decoders serve the lossy
    formats on the web** (question 1). The owner first said "I think your recommendation is likely good so far". The
    owner then asked four things, each answered the same day, and confirmed: "sounds good to me".

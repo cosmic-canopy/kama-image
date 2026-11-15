@@ -1,0 +1,118 @@
+// The encoder's promise (AGENTS.image.md § Decided, 4): its bytes depend only on the image and its options, on every
+// target. `archival()`'s are written down here, a length and a CRC-32 an image, so a kama whose deflater moved them, or a
+// change to this package that did, fails the gate. Every leg prints an `encoded` line for each image at `standard()` and
+// at `archival()`, and tools/test.sh holds the legs' lines to each other.
+
+import {
+    core::println,
+    std::collections::DynamicArray, std::collections::FixedArray,
+    std::digest::crc32::crc32,
+    image::Image, image::ImageError, image::PixelFormat, image::AlphaMode, image::ColorSpace, image::Primaries,
+    image::Transfer,
+    image::png::EncodeOptions,
+    Run, encodedBy, patterned, goodProfile,
+};
+
+export { promiseCases };
+
+// The fixed set, by number: every colour type at 8 and 16 bits, colour chunks, a profile, a smooth gradient and noise.
+fn string nameAt(isize k) {
+    if (k == 0) { return "grey8"; }
+    if (k == 1) { return "greyAlpha8"; }
+    if (k == 2) { return "rgb8"; }
+    if (k == 3) { return "rgba8-srgb"; }
+    if (k == 4) { return "grey16"; }
+    if (k == 5) { return "greyAlpha16"; }
+    if (k == 6) { return "rgb16-pq"; }
+    if (k == 7) { return "rgba16"; }
+    if (k == 8) { return "gradient"; }
+    if (k == 9) { return "noise"; }
+    return "profile";
+}
+
+fn Result<Image, ImageError> imageAt(isize k) {
+    if (k == 8) {
+        // a smooth 256 × 256 gradient, the kind of image a render is
+        FixedArray<uint8> s = FixedArray.make(size: 256 * 256 * 4);
+        for (isize y = 0; y < 256; y = y + 1) {
+            for (isize x = 0; x < 256; x = x + 1) {
+                isize at = (y * 256 + x) * 4;
+                s[at] = truncate<uint8>(x);
+                s[at + 1] = truncate<uint8>(y);
+                s[at + 2] = truncate<uint8>((x + y) / 2);
+                s[at + 3] = 255;
+            }
+        }
+        return Image.fromSamples8(width: 256, height: 256, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque,
+                                  colorSpace: ColorSpace.srgb(), samples: give s);
+    }
+    if (k == 9) {
+        FixedArray<uint8> s = FixedArray.make(size: 128 * 128 * 4);
+        uint64 state = 88172645ui64;
+        for (isize i = 0; i < s.length(); i = i + 1) {
+            state = (state ^ (state << 13)) & 0xffffffffui64;
+            state = state ^ (state >> 17);
+            state = (state ^ (state << 5)) & 0xffffffffui64;
+            s[i] = truncate<uint8>(state >> 24);
+        }
+        return Image.fromSamples8(width: 128, height: 128, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Straight,
+                                  colorSpace: ColorSpace.unspecified(), samples: give s);
+    }
+    InlineArray<PixelFormat>#(8) formats = [PixelFormat::R8Unorm, PixelFormat::Rg8Unorm, PixelFormat::Rgba8Unorm, PixelFormat::Rgba8Unorm,
+        PixelFormat::R16Unorm, PixelFormat::Rg16Unorm, PixelFormat::Rgba16Unorm, PixelFormat::Rgba16Unorm];
+    InlineArray<AlphaMode>#(8) alphas = [AlphaMode::Opaque, AlphaMode::Straight, AlphaMode::Opaque, AlphaMode::Straight,
+        AlphaMode::Opaque, AlphaMode::Straight, AlphaMode::Opaque, AlphaMode::Straight];
+    isize f = k < 8 ? k : 3;
+    Result<Image, ImageError> made = patterned(format: formats[f], alpha: alphas[f], w: 64, h: 48, opaqueAlpha: 255);
+    return match (give made) {
+        case Ok(value: img): {
+            Image i = give img;
+            if (k == 3) { i.setColorSpace(space: ColorSpace.srgb()); }
+            if (k == 6) { i.setColorSpace(space: ColorSpace.make(primaries: Primaries::Bt2020, transfer: Transfer::Pq)); }
+            if (k == 10) {
+                i.setColorSpace(space: ColorSpace.make(primaries: Primaries::IccProfile, transfer: Transfer::IccProfile));
+                i.setIccProfile(name: "probe", profile: goodProfile());
+            }
+            := Result::Ok(value: give i);
+        }
+        case Err(error: e): Result::Err(error: e);
+    };
+}
+
+// `archival()`'s bytes for each image of the set: the file's length, then its CRC-32. Written down from kama 0.9.949;
+// std's Frozen promises no kama version moves them, and a change to this package that did would need a written reason.
+fn int64 archivedLength(isize k) {
+    InlineArray<int64>#(11) v = [1686i64, 2706i64, 4012i64, 5477i64, 2665i64, 3946i64, 4933i64, 5730i64, 753i64, 65764i64, 5457i64];
+    return v[k];
+}
+fn uint32 archivedCrc(isize k) {
+    InlineArray<uint32>#(11) v = [147961806ui32, 3883872773ui32, 504679914ui32, 1319131741ui32, 4273091911ui32, 1114975363ui32, 1585611916ui32, 2236577823ui32, 2098661460ui32, 2747651160ui32, 2000012865ui32];
+    return v[k];
+}
+
+fn void promiseCases(ref Run run) {
+    for (isize k = 0; k < 11; k = k + 1) {
+        string name = nameAt(k: k);
+        Result<Image, ImageError> made = imageAt(k: k);
+        match (give made) {
+            case Ok(value: img): {
+                DynamicArray<uint8> standard = DynamicArray.empty();
+                DynamicArray<uint8> kept = DynamicArray.empty();
+                string why = encodedBy(img: img, options: EncodeOptions.standard(), file: ref standard);
+                if (why.isEmpty()) { why = encodedBy(img: img, options: EncodeOptions.archival(), file: ref kept); }
+                if (!why.isEmpty()) { run.fail(name: name, why: why); continue; }
+                isize sl = standard.length();
+                uint32 sc = crc32(bytes: standard.view());
+                isize al = kept.length();
+                uint32 ac = crc32(bytes: kept.view());
+                println(s: "encoded ${name} standard ${sl} ${sc}");
+                println(s: "encoded ${name} archival ${al} ${ac}");
+                int64 wl = archivedLength(k: k);
+                uint32 wc = archivedCrc(k: k);
+                if (cast<int64>(al) != wl || ac != wc) { run.fail(name: name + ", archival()", why: "${al} bytes, CRC-32 ${ac}; written down: ${wl} bytes, ${wc}"); }
+                else { run.pass(); }
+            }
+            case Err(error: e): { string m = e.message(); run.fail(name: name, why: "not made (${m})"); }
+        };
+    }
+}

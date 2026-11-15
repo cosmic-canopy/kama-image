@@ -5,11 +5,15 @@ tested. What comes next is [ROADMAP.md](ROADMAP.md), the decided design and its 
 [AGENTS.image.md](AGENTS.image.md) § Decided, the evidence behind them is [RESEARCH.md](RESEARCH.md), and the history is
 the git log and [CHANGELOG.md](CHANGELOG.md).
 
-**Where it stands** (2026-11-14, kama 0.9.949): the `Image` type with `convert(to:)`, and PNG decoding (IMG-1, built):
-every colour type and bit depth, palettes, `tRNS`, Adam7 interlacing, an APNG's default image and the colour chunks,
-strict and within limits, with `keepGrey` and `partial`. Every PngSuite file and the
-crafted cases are held to libpng's pixels and to what libpng keeps of their colour chunks, natively on Windows (debug
-and release) and on wasm under node. Not published.
+**Where it stands** (2026-11-14, kama 0.9.949): the `Image` type with `convert(to:)`, and PNG whole:
+- **decoding** (IMG-1): every colour type and bit depth, palettes, `tRNS`, Adam7 interlacing, an APNG's default image and
+  the colour chunks, strict and within limits, with `keepGrey` and `partial`;
+- **encoding** (IMG-2): `standard()` and `archival()`, libpng's adaptive filter and the five fixed ones, the colour
+  chunks written back, the same bytes on every target.
+
+Every PngSuite file and the crafted cases are held to libpng's pixels, to what libpng keeps of their colour chunks and
+to the filter libpng's writer chooses for each row, natively on Windows (debug and release) and on wasm under node. Not
+published.
 
 ## Using it
 
@@ -26,6 +30,12 @@ match (give r) {
     case Ok(value: img): { borrow img.bytes() as b { … upload b … } }
     case Err(error: e): { string why = e.message(); … }        // "chunk CRC in IDAT at byte 57"
 };
+```
+
+```kama
+import { image::png::encode, image::png::EncodeOptions };
+
+Result<DynamicArray<uint8>, ImageError> png = encode(image: img, options: EncodeOptions.standard());   // or archival()
 ```
 
 ## Invariants
@@ -91,7 +101,7 @@ byte's) and `chunk()` (the chunk's type as PNG stores it, 0 for none; `chunkCode
 `message()` names all three: "chunk CRC in IDAT at byte 57".
 
 `ImageErrorKind` (`@nonExhaustive`): `Signature`, `Truncated`, `ChunkType`, `ChunkCrc`, `ChunkOrder`, `Header`,
-`Palette`, `Data`, `DataChecksum`, `Limit`, `Unsupported` and `Samples`, each with `name()`.
+`Palette`, `Data`, `DataChecksum`, `Limit`, `Unsupported`, `Samples` and `Metadata`, each with `name()`.
 
 ## Decode options
 
@@ -167,20 +177,78 @@ height maps and masks; any other image decodes as without it. A caller raises or
 
   Bytes after `IEND` are not read.
 
+## PNG encoding
+
+`image::png::encode(image:, options:) -> Result<DynamicArray<uint8>, ImageError>` writes an image as a PNG file:
+
+```kama
+import { image::png::encode, image::png::EncodeOptions };
+
+Result<DynamicArray<uint8>, ImageError> r = encode(image: img, options: EncodeOptions.archival());
+```
+
+- **The bytes depend only on the image and the options,** on every target, for one kama version, and with `archival()`
+  across kama versions too. The gate holds every leg's bytes for a fixed set of images to each other's, and
+  `archival()`'s to the lengths and CRC-32s written in the tests.
+- **`EncodeOptions`** (`image::png`), a value: `level`, std's `DeflateLevel`, and `filter`, a `Filter`.
+  - `standard()`, the default: `Level6` and `Adaptive`;
+  - `archival()`: `Frozen` and `Adaptive`, for a file kept in a repository, such as a golden image.
+- **`Filter`:** `Adaptive` takes for each row the filter libpng 1.6.50's writer takes with all five allowed: the least
+  sum of the filtered bytes, each read as a signed number; None, Sub, Up, Average and Paeth tried in that order, and the
+  earlier kept on a tie; an image one row high allows only None and Sub, and one a column wide only None and Up. `None`,
+  `Sub`, `Up`, `Average` and `Paeth` are that one filter on every row.
+- **The image as it is held,** at 8 or 16 bits (16-bit samples big-endian), with no palette, no depth below 8 and no
+  interlacing; an opaque image's alpha channel is not written:
+
+  | format | `Straight` | `Opaque` |
+  |---|---|---|
+  | `R8Unorm`, `R16Unorm` | grey | grey |
+  | `Rg8Unorm`, `Rg16Unorm` | grey with alpha | grey |
+  | `Rgba8Unorm`, `Rgba16Unorm` | RGBA | RGB |
+
+- **The image data** is deflated at the options' level into `IDAT` chunks of 65,536 bytes, together, the last no longer.
+- **The chunks,** in libpng's order: `IHDR`, `cLLI`, `mDCV`, `cICP`, `iCCP`, `sRGB`, `gAMA`, `cHRM`, `eXIf`, `IDAT`,
+  `IEND`. Never `tIME` or text.
+- **A file decodes back to the image's colour space, with everything the image carries:**
+  - what it carries is written back as it is: its cICP, its ICC profile and the profile's name (deflated at the
+    options' level), its rendering intent as `sRGB`, its Exif data, its mastering display and its content light levels;
+  - where nothing it carries gives its colour space, the colour space is written: sRGB as `sRGB` (intent perceptual)
+    with a `gAMA` of 45455 and BT.709's `cHRM` beside it, as the PNG Third Edition recommends; linear sRGB, Display P3,
+    and BT.2020 with PQ or HLG as a `cICP`; a gamma as `gAMA` and chromaticities as `cHRM`, a named set's when the
+    colour space holds none; `Unspecified` as nothing.
+- **Refused:**
+
+  | kind | when |
+  |---|---|
+  | `Unsupported` | premultiplied alpha, or float samples (`Rgba16Float`, `Rgba32Float`): `convert(to:)` gives a unorm format |
+  | `Truncated` | an image with rows missing, `isPartial()` |
+  | `Header` | a width or height past 2³¹ − 1 |
+  | `Metadata`, in `cICP` | a cICP whose matrix is not 0 |
+  | `Metadata`, in `iCCP` | a profile libpng would not keep on the colour type written (an RGB profile for colour, a grey one for grey), or a name that is not 1 to 79 printable Latin-1 characters with no leading, trailing or double space |
+  | `Metadata`, in `eXIf` | Exif data that does not start `II*\0` or `MM\0*` |
+  | `Metadata` | a colour space the chunks cannot give back: an ICC colour space with no profile, sRGB beside a profile or a cICP that names another space, sRGB's curve with no primaries, a gamma of 0, custom primaries without chromaticities or with a negative one |
+
 ## Tests
 
 `tools/test.sh` is the gate: the roadmap's shape (`tools/check-roadmap.sh`), `kama check` on the package and its tests,
 then `tests/`, one program, built debug and release and run natively, and built for the web and run under node with its
-fixtures embedded. 491 cases on each leg:
+fixtures embedded. 1,401 cases on each leg. Last, every leg's encoded bytes for the encoder's fixed set are held to
+each other's:
 
 - **Every fixture held to libpng's answer:** PngSuite 2017jul19's 176 files (`tests/fixtures/pngsuite/`, with its
-  licence) and 38 crafted cases (`tests/fixtures/crafted/`, written by `tools/reference/craft.mjs`):
+  licence) and 40 crafted cases (`tests/fixtures/crafted/`, written by `tools/reference/craft.mjs`):
   - each decoded one has the same size, format, alpha and samples (their CRC-32) as libpng 1.6.59 decodes it;
   - each also has what libpng keeps of its colour chunks (the profile and Exif data by CRC-32, the cICP code points,
     mDCV by CRC-32, cLLI), and the colour space they give by the precedence above;
   - each is decoded again with `keepGrey`: a grey one has the format and samples libpng gives it without
     `png_set_gray_to_rgb` (54 of them), and any other is unchanged;
-  - each refused one has the kind of error libpng's words name.
+  - each refused one has the kind of error libpng's words name;
+  - each decoded one is encoded with `standard()` and `archival()`, and kept grey, and decoded again to the same
+    format, alpha, samples, colour space and metadata, exactly;
+  - each row's filter under `Adaptive` is the one libpng 1.6.59's writer chooses for the same rows with all five
+    filters allowed (expected.c's `chosen_filters` writes them, inflates its own image data and records each row's
+    filter byte), kept grey too. Two crafted cases, one row high and one column wide, halve their samples from pixel to
+    pixel, so Average would win on them were it allowed.
 
   The expectations are `tests/src/expected.kama`, written on purpose by `tools/reference/run.sh` from
   `tools/reference/expected.c`, never by the gate.
@@ -201,9 +269,23 @@ fixtures embedded. 491 cases on each leg:
 - **`partial`** (`tests/src/partial.kama`, on files whose data is stored, so a cut lands on a known row): a cut in a
   row, a cut after the image data, a whole file, an Adam7 file cut after two passes, a cut before any image data, data
   corrupt before the cut, data short in a whole file, and a partial image converted.
+- **The encoder** (`tests/src/encode.kama`): each fixed filter on every row, at 1, 2, 3, 4, 6 and 8 bytes a pixel, on
+  13 × 7, 13 × 1 and 1 × 7 images; the colour type and depth each format and alpha mode are written as; an opaque
+  image's alpha not written, whatever it holds; noise cut into IDAT chunks of exactly 65,536 bytes; and the refusals.
+- **The colour chunks written** (`tests/src/encodecolour.kama`): each colour space's exact chunk list and data, in
+  libpng's order; what an image carries written back and decoded again; and each `Metadata` refusal.
+- **The promise** (`tests/src/promise.kama`): a fixed set (every colour type at 8 and 16 bits, sRGB and PQ chunks, a
+  profile, a smooth gradient and noise across two IDAT chunks) is encoded with both options. `archival()`'s length and
+  CRC-32 are written down for each, and each leg prints an `encoded` line for both, which `tools/test.sh` holds to every
+  other leg's: native debug, native release, and wasm at kama's `-Oz`.
+- **libpng reads every file the encoder writes** (`tools/reference/encoded.sh`, run on purpose, since the gate has no
+  libpng): each fixture encoded with `archival()`, and each grey one kept grey, is decoded by libpng 1.6.59 with any
+  warning a failure, and libpng's answer on it is its answer on the fixture: size, format, alpha, samples, colour
+  chunks and each row's chosen filter (`tools/reference/compare.mjs`). On 2026-11-14, all 254 files (200, and 54
+  kept grey) were read with no warning, and none differed.
 - **The sweep** (`tests/src/sweep.kama`, `imagetests --sweep`), natively in debug and in release: every single-bit flip
   and every truncation of every fixture libpng decodes (crafted ones up to 3 KB), each truncation again with `partial`,
-  1,320,980 decodes, with no trap. A flip
+  1,323,740 decodes, with no trap. A flip
   inside a chunk's type or data has the chunk's CRC put right first, as libpng's OSS-Fuzz harness has libpng ignore
   CRCs, so the flip reaches the code behind the check. The debug build compiles the package and std at the release
   level (`debug.optimize` in `tests/kama.json`), which keeps kama's overflow traps and bounds checks: about 24 s a leg
