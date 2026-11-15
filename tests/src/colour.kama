@@ -133,22 +133,30 @@ fn void colourCases(ref Run run) {
         expectSpace(run: ref run, name: "a second gAMA, dropped", png: rgbFile(before: two, after: none),
                     want: "Unspecified Gamma", gamma: 45455ui32, iccBytes: 0, exifBytes: 0);
     }
+    {
+        // libpng takes a gAMA of 0 (as 1.0), so a gAMA after it is a duplicate; this decoder drops both
+        DynamicArray<uint8> two = gama(g: 0ui32);
+        two.addAll(items: gama(g: 45455ui32).view());
+        expectSpace(run: ref run, name: "a gAMA after a gAMA of 0, dropped", png: rgbFile(before: two, after: none),
+                    want: "Unspecified Unspecified", gamma: 0ui32, iccBytes: 0, exifBytes: 0);
+    }
 
-    // cICP that this package does not name is kept, and the next chunk gives the colour space
+    // A cICP whose matrix is not 0 is dropped, as libpng's png_set_cICP drops it (the PNG Third Edition, § 11.3.2.6, requires
+    // 0), and the next chunk gives the colour space. libpng's answer on such a file is hc-cicp-matrix.png's row.
     {
         InlineArray<uint8>#(8) codes = [12, 13, 1, 1, 0, 0, 0, 0];   // Display P3 and sRGB's curve, were its matrix 0
         DynamicArray<uint8> before = framed(kind: "cICP", data: bytesOf(v: codes, n: 4));
         InlineArray<uint8>#(8) intent = [0, 0, 0, 0, 0, 0, 0, 0];
         before.addAll(items: framed(kind: "sRGB", data: bytesOf(v: intent, n: 1)).view());
         DynamicArray<uint8> png = rgbFile(before: before, after: none);
-        expectSpace(run: ref run, name: "a cICP with matrix 1, not named", png: png, want: "Bt709 Srgb", gamma: 0ui32, iccBytes: 0, exifBytes: 0);
+        expectSpace(run: ref run, name: "a cICP with matrix 1, dropped", png: png, want: "Bt709 Srgb", gamma: 0ui32, iccBytes: 0, exifBytes: 0);
         Result<Image, ImageError> r = decode(bytes: png.view(), options: DecodeOptions.defaults());
-        uint8 matrix = 0;
+        bool kept = true;
         match (give r) {
-            case Ok(value: img): { Optional<Cicp> c = img.cicp(); matrix = match (c) { case Some(value: v): v.matrix; case None: 0; }; }
+            case Ok(value: img): { Optional<Cicp> c = img.cicp(); kept = c.isSome(); }
             case Err(error: e): { }
         };
-        if (matrix == 1) { run.pass(); } else { run.fail(name: "a cICP not named, kept", why: "matrix ${matrix}"); }
+        if (!kept) { run.pass(); } else { run.fail(name: "a cICP with matrix 1, dropped", why: "kept, or the file refused"); }
     }
     {
         InlineArray<uint8>#(8) codes = [1, 13, 0, 0, 0, 0, 0, 0];

@@ -73,6 +73,15 @@ evidence is [RESEARCH.md](RESEARCH.md), its probes in `.scratch/img-probe-*/`. A
      - **A gAMA of 0 is dropped,** where libpng 1.6.59 reports it as 1.0. A gamma of 0 means nothing, and the PNG Third
        Edition (§ 13.2) lets an unexpected value in an ancillary chunk be ignored. This is the one place the tests hold
        the decoder to its own answer over libpng's.
+   - **Fixed when IMG-2 started, the same day, to keep the rule above,** each found by reading libpng 1.6.50's source
+     for the encoder and held to libpng 1.6.59 on a crafted file:
+     - **a cICP whose matrix is not 0 is dropped.** libpng's `png_set_cICP` refuses it, and the PNG Third Edition
+       (§ 11.3.2.6) says the matrix "shall be set to 0", since PNG holds RGB only. The decoder had kept it, so an encoder
+       would have written back a chunk libpng drops;
+     - **a colour chunk counts as seen only once libpng would take it** (pngrutil.c's `png_handle_chunk`), so a broken
+       one (the wrong length, an sRGB intent past 3, a value past 2³¹−1, a malformed profile, Exif with no byte-order
+       mark) leaves room for a good one after it. The decoder had dropped the good one. libpng's handler counts a cICP
+       whose matrix it drops, and a gAMA of 0, as seen, and so does the decoder.
 2. **Decided on 2026-11-14: a decode is strict by default, within limits, and never ends the program** (question 3).
    The owner: "I will take your recommendation."
    - **`DecodeLimits`**, each raisable or lowerable by the caller:

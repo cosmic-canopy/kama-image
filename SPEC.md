@@ -70,7 +70,7 @@ samples row by row from the top, four channels interleaved where the format has 
   - `renderingIntent()`, an `Optional<RenderingIntent>` (`Perceptual`, `RelativeColorimetric`, `Saturation`,
     `AbsoluteColorimetric`);
   - `cicp()`, an `Optional<Cicp>`: H.273's `primaries`, `transfer` and `matrix` code points and `fullRange`, kept
-    whether or not `ColorSpace` names them;
+    whether or not `ColorSpace` names them (a PNG's matrix is always 0, since one that is not is dropped);
   - `masteringDisplay()`, an `Optional<MasteringDisplay>`: its red, green, blue and white x and y in units of
     0.00002, and its `maxLuminance` and `minLuminance` in units of 0.0001 cd/m²;
   - `contentLight()`, an `Optional<ContentLight>`: `maxCll` and `maxFall`, in units of 0.0001 cd/m².
@@ -143,7 +143,9 @@ height maps and masks; any other image decodes as without it. A caller raises or
   4. else `gAMA` and `cHRM` together or alone: a gAMA of 100000 is `Linear`, any other `Gamma`; chromaticities within
      0.001 of BT.709's, Display P3's or BT.2020's are named, any others `Custom`.
 - **The colour chunks kept,** each as libpng 1.6.50 keeps it: `cICP`, `iCCP`, `sRGB`, `gAMA`, `cHRM`, `mDCV` and `cLLI`
-  before `PLTE` and `IDAT` and once; `eXIf` anywhere after `IHDR`, once. An `iCCP` profile is inflated within
+  before `PLTE` and `IDAT` and once; `eXIf` anywhere after `IHDR`, once. "Once" counts only a chunk libpng would take
+  (pngrutil.c's `png_handle_chunk`), so a broken one leaves room for a good one after it: a `cICP` counts once it is in
+  place and four bytes long, even when its matrix drops it, and a `gAMA` of 0 counts. An `iCCP` profile is inflated within
   `maxChunkBytes` and `maxBytes`, and kept when it passes libpng's checks:
   - its declared length is its length, and at least 132;
   - a version 4 profile's length is a multiple of 4;
@@ -158,6 +160,7 @@ height maps and masks; any other image decodes as without it. A caller raises or
   - an `sRGB` intent past 3;
   - a `gAMA` of 0, which libpng 1.6.59 reports as 1.0 (PNG Third Edition § 13.2), or past 2³¹−1;
   - a `cHRM` value past 2³¹−1;
+  - a `cICP` whose matrix is not 0, which the PNG Third Edition forbids (§ 11.3.2.6) and libpng's `png_set_cICP` refuses;
   - an `iCCP` whose name is not 1 to 79 bytes, whose compression method is not 0, or whose profile is malformed;
   - an `eXIf` that does not start `II*\0` or `MM\0*`;
   - every ancillary chunk this decoder does not read.
@@ -168,10 +171,10 @@ height maps and masks; any other image decodes as without it. A caller raises or
 
 `tools/test.sh` is the gate: the roadmap's shape (`tools/check-roadmap.sh`), `kama check` on the package and its tests,
 then `tests/`, one program, built debug and release and run natively, and built for the web and run under node with its
-fixtures embedded. 470 cases on each leg:
+fixtures embedded. 491 cases on each leg:
 
 - **Every fixture held to libpng's answer:** PngSuite 2017jul19's 176 files (`tests/fixtures/pngsuite/`, with its
-  licence) and 28 crafted cases (`tests/fixtures/crafted/`, written by `tools/reference/craft.mjs`):
+  licence) and 38 crafted cases (`tests/fixtures/crafted/`, written by `tools/reference/craft.mjs`):
   - each decoded one has the same size, format, alpha and samples (their CRC-32) as libpng 1.6.59 decodes it;
   - each also has what libpng keeps of its colour chunks (the profile and Exif data by CRC-32, the cICP code points,
     mDCV by CRC-32, cLLI), and the colour space they give by the precedence above;
@@ -189,7 +192,7 @@ fixtures embedded. 470 cases on each leg:
   - a profile's compression method and name, a Latin-1 name, and a profile that inflates past `maxChunkBytes`;
   - the tolerance a named set of chromaticities is matched within;
   - a cICP this package does not name;
-  - a gAMA of 0, out of place, or repeated;
+  - a gAMA of 0, out of place, or repeated, and one after a gAMA of 0;
   - Exif repeated, short, or past `maxBytes`;
   - mDCV and cLLI of the wrong length.
 - **`convert(to:)`** (`tests/src/convert.kama`): every 8-bit value to 16 bits and every 16-bit value to 8, half floats
@@ -200,7 +203,7 @@ fixtures embedded. 470 cases on each leg:
   corrupt before the cut, data short in a whole file, and a partial image converted.
 - **The sweep** (`tests/src/sweep.kama`, `imagetests --sweep`), natively in debug and in release: every single-bit flip
   and every truncation of every fixture libpng decodes (crafted ones up to 3 KB), each truncation again with `partial`,
-  1,298,030 decodes, with no trap. A flip
+  1,320,980 decodes, with no trap. A flip
   inside a chunk's type or data has the chunk's CRC put right first, as libpng's OSS-Fuzz harness has libpng ignore
   CRCs, so the flip reaches the code behind the check. The debug build compiles the package and std at the release
   level (`debug.optimize` in `tests/kama.json`), which keeps kama's overflow traps and bounds checks: about 24 s a leg

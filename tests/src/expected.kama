@@ -752,6 +752,14 @@ fn void fillExpected(ref Table t) {
     t.colour(name: "hc-chrm-p3.png", primaries: Primaries::DisplayP3, transfer: Transfer::Gamma, gamma: 45455,
              chromaticities: [31270, 32900, 68000, 32000, 26500, 69000, 15000, 6000], intent: -1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.decoded(name: "hc-cicp-matrix.png", width: 8, height: 8, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 4236399726ui32);
+    t.colour(name: "hc-cicp-matrix.png", primaries: Primaries::Bt709, transfer: Transfer::Srgb, gamma: 0,
+             chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: 0,
+             iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.decoded(name: "hc-cicp-matrix-twice.png", width: 8, height: 8, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 4236399726ui32);
+    t.colour(name: "hc-cicp-matrix-twice.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
+             chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
+             iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
     t.decoded(name: "hc-cicp-p3-icc.png", width: 8, height: 8, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 4236399726ui32);
     t.colour(name: "hc-cicp-p3-icc.png", primaries: Primaries::DisplayP3, transfer: Transfer::Srgb, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
@@ -804,6 +812,38 @@ fn void fillExpected(ref Table t) {
     t.decoded(name: "hc-srgb-twice.png", width: 8, height: 8, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 4236399726ui32);
     t.colour(name: "hc-srgb-twice.png", primaries: Primaries::Bt709, transfer: Transfer::Srgb, gamma: 0,
              chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: 2,
+             iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.decoded(name: "hc-then-chrm.png", width: 8, height: 8, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 4236399726ui32);
+    t.colour(name: "hc-then-chrm.png", primaries: Primaries::DisplayP3, transfer: Transfer::Unspecified, gamma: 0,
+             chromaticities: [31270, 32900, 68000, 32000, 26500, 69000, 15000, 6000], intent: -1,
+             iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.decoded(name: "hc-then-cicp.png", width: 8, height: 8, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 4236399726ui32);
+    t.colour(name: "hc-then-cicp.png", primaries: Primaries::DisplayP3, transfer: Transfer::Srgb, gamma: 0,
+             chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
+             iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: 202178561, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.decoded(name: "hc-then-clli.png", width: 8, height: 8, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Opaque, crc: 1307519478ui32);
+    t.colour(name: "hc-then-clli.png", primaries: Primaries::Bt2020, transfer: Transfer::Pq, gamma: 0,
+             chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
+             iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: 152043521, mdcvCrc: 0ui32, maxCll: 10000000, maxFall: 4000000);
+    t.decoded(name: "hc-then-exif.png", width: 8, height: 8, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 4236399726ui32);
+    t.colour(name: "hc-then-exif.png", primaries: Primaries::Unspecified, transfer: Transfer::Unspecified, gamma: 0,
+             chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
+             iccLength: 0, iccCrc: 0ui32, exifLength: 10, exifCrc: 2012286387ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.decoded(name: "hc-then-gama.png", width: 8, height: 8, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 4236399726ui32);
+    t.colour(name: "hc-then-gama.png", primaries: Primaries::Unspecified, transfer: Transfer::Gamma, gamma: 45455,
+             chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
+             iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.decoded(name: "hc-then-icc.png", width: 8, height: 8, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 4236399726ui32);
+    t.colour(name: "hc-then-icc.png", primaries: Primaries::IccProfile, transfer: Transfer::IccProfile, gamma: 0,
+             chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
+             iccLength: 464, iccCrc: 3905264947ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
+    t.decoded(name: "hc-then-mdcv.png", width: 8, height: 8, format: PixelFormat::Rgba16Unorm, alpha: AlphaMode::Opaque, crc: 1307519478ui32);
+    t.colour(name: "hc-then-mdcv.png", primaries: Primaries::Bt2020, transfer: Transfer::Pq, gamma: 0,
+             chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: -1,
+             iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: 152043521, mdcvCrc: 800989914ui32, maxCll: -1, maxFall: -1);
+    t.decoded(name: "hc-then-srgb.png", width: 8, height: 8, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 4236399726ui32);
+    t.colour(name: "hc-then-srgb.png", primaries: Primaries::Bt709, transfer: Transfer::Srgb, gamma: 0,
+             chromaticities: [0, 0, 0, 0, 0, 0, 0, 0], intent: 1,
              iccLength: 0, iccCrc: 0ui32, exifLength: 0, exifCrc: 0ui32, cicp: -1, mdcvCrc: 0ui32, maxCll: -1, maxFall: -1);
     t.decoded(name: "hiccp.png", width: 64, height: 64, format: PixelFormat::Rgba8Unorm, alpha: AlphaMode::Opaque, crc: 622856282ui32);
     t.colour(name: "hiccp.png", primaries: Primaries::IccProfile, transfer: Transfer::IccProfile, gamma: 0,

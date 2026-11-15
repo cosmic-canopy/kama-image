@@ -502,9 +502,13 @@ fn Result<Image, ImageError> decode(ConstView<uint8> bytes, const ref DecodeOpti
             // An ancillary chunk that is broken, repeated or out of place is dropped, as libpng drops it. The colour chunks
             // come before PLTE and IDAT; eXIf anywhere after IHDR, as libpng takes it.
             bool early = !c.hasPalette && !dataStarted;
+            // Each counts as seen only once libpng would have taken it (pngrutil.c's png_handle_chunk), so a broken one
+            // leaves room for a good one after it.
             if (crcGood && kind == CICP && !seenCicp) {
-                seenCicp = true;
-                if (early && len == 4) {
+                // Seen once in place and four bytes long, as libpng's handler counts it; kept only with matrix 0, which the
+                // PNG Third Edition requires (§ 11.3.2.6) and libpng's png_set_cICP checks.
+                if (early && len == 4) { seenCicp = true; }
+                if (early && len == 4 && bytes[d + 2] == 0) {
                     c.hasCicp = true;
                     c.cicpPrimaries = cast<int32>(bytes[d]);
                     c.cicpTransfer = cast<int32>(bytes[d + 1]);
@@ -512,7 +516,6 @@ fn Result<Image, ImageError> decode(ConstView<uint8> bytes, const ref DecodeOpti
                     c.cicpRange = cast<int32>(bytes[d + 3]);
                 }
             } else if (crcGood && kind == ICCP && !seenIcc) {
-                seenIcc = true;
                 if (early) {
                     // The inflated profile is held to maxChunkBytes, as every chunk is, and to what the decode may still
                     // allocate: past either, the file is refused. A profile that is malformed is dropped.
@@ -520,22 +523,22 @@ fn Result<Image, ImageError> decode(ConstView<uint8> bytes, const ref DecodeOpti
                     bool tooLarge = false;
                     icc = iccOf(data: bytes.slice(from: d, count: len), colourType: h.colourType, most: most, name: ref iccName, tooLarge: ref tooLarge);
                     if (tooLarge) { return refuse(kind: ImageErrorKind::Limit, at: start, chunk: kind); }
-                    if (icc.length() > 0 && take(left: ref left, amount: cast<int64>(icc.length()))) { c.hasIcc = true; }
+                    if (icc.length() > 0 && take(left: ref left, amount: cast<int64>(icc.length()))) { c.hasIcc = true; seenIcc = true; }
                     else { icc = DynamicArray.empty(); iccName = ""; }
                 }
             } else if (crcGood && kind == SRGB && !seenSrgb) {
-                seenSrgb = true;
-                if (early && len == 1 && bytes[d] <= 3) { c.hasSrgb = true; c.intent = cast<int32>(bytes[d]); }
+                if (early && len == 1 && bytes[d] <= 3) { seenSrgb = true; c.hasSrgb = true; c.intent = cast<int32>(bytes[d]); }
             } else if (crcGood && kind == GAMA && !seenGama) {
-                seenGama = true;
                 uint32 g = len == 4 ? be32(b: bytes, at: d) : 0ui32;
+                // a gAMA of 0 is taken by libpng (as 1.0), so it is seen, though this decoder drops it
+                if (early && len == 4 && g <= 0x7fffffffui32) { seenGama = true; }
                 if (early && len == 4 && g >= 1 && g <= 0x7fffffffui32) { c.hasGamma = true; c.gamma = cast<int64>(g); }
             } else if (crcGood && kind == CHRM && !seenChrm) {
-                seenChrm = true;
                 if (early && len == 32) {
                     bool fits = true;
                     for (isize i = 0; i < 8; i = i + 1) { if (be32(b: bytes, at: d + i * 4) > 0x7fffffffui32) { fits = false; } }
                     if (fits) {
+                        seenChrm = true;
                         c.hasChrm = true;
                         c.chrm = Chromaticities.make(whiteX: cast<int32>(be32(b: bytes, at: d)), whiteY: cast<int32>(be32(b: bytes, at: d + 4)),
                             redX: cast<int32>(be32(b: bytes, at: d + 8)), redY: cast<int32>(be32(b: bytes, at: d + 12)),
@@ -544,8 +547,8 @@ fn Result<Image, ImageError> decode(ConstView<uint8> bytes, const ref DecodeOpti
                     }
                 }
             } else if (crcGood && kind == MDCV && !seenMdcv) {
-                seenMdcv = true;
                 if (early && len == 24) {
+                    seenMdcv = true;
                     c.hasMdcv = true;
                     c.mdcv.redX = be16(b: bytes, at: d); c.mdcv.redY = be16(b: bytes, at: d + 2);
                     c.mdcv.greenX = be16(b: bytes, at: d + 4); c.mdcv.greenY = be16(b: bytes, at: d + 6);
@@ -555,16 +558,16 @@ fn Result<Image, ImageError> decode(ConstView<uint8> bytes, const ref DecodeOpti
                     c.mdcv.minLuminance = be32(b: bytes, at: d + 20);
                 }
             } else if (crcGood && kind == CLLI && !seenClli) {
-                seenClli = true;
                 if (early && len == 8) {
+                    seenClli = true;
                     c.hasClli = true;
                     c.clli = ContentLight.make(maxCll: be32(b: bytes, at: d), maxFall: be32(b: bytes, at: d + 4));
                 }
             } else if (crcGood && kind == EXIF && !seenExif) {
-                seenExif = true;
                 uint32 head = len >= 4 ? be32(b: bytes, at: d) : 0ui32;
                 if (head == 0x49492A00ui32 || head == 0x4D4D002Aui32) {
                     if (!take(left: ref left, amount: cast<int64>(len))) { return refuse(kind: ImageErrorKind::Limit, at: start, chunk: kind); }
+                    seenExif = true;
                     c.hasExif = true;
                     exif.addAll(items: bytes.slice(from: d, count: len));
                 }

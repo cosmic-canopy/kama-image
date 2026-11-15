@@ -171,6 +171,23 @@ write('hc-hdr.png', colourPng({ depth: 16, before: [cicp(9, 16, 0, 1),
     chunk('cLLI', u32s(10000000, 4000000))] }));
 write('hc-exif.png', colourPng({ after: [chunk('eXIf', Buffer.from('MM\0*\0\0\0\x08\0\0', 'latin1'))] }));
 write('hc-exif-bad.png', colourPng({ before: [chunk('eXIf', Buffer.from('XX\0*\0\0\0\x08', 'latin1'))] }));
+// 12a. A cICP whose matrix is not 0, which the PNG Third Edition forbids (§ 11.3.2.6) and libpng's png_set_cICP refuses,
+//      though its handler still counts the chunk as seen, so a second cICP is a duplicate.
+write('hc-cicp-matrix.png', colourPng({ before: [cicp(12, 13, 1, 1), srgb(0)] }));
+write('hc-cicp-matrix-twice.png', colourPng({ before: [cicp(12, 13, 1, 1), cicp(12, 13, 0, 1)] }));
+// 12b. A colour chunk libpng does not accept is not counted as seen (pngrutil.c's png_handle_chunk), so a second one
+//      after it is read: each broken one here is followed by a good one.
+const exifGood = chunk('eXIf', Buffer.from('II*\0\x08\0\0\0\0\0', 'latin1'));
+write('hc-then-cicp.png', colourPng({ before: [chunk('cICP', Buffer.from([12, 13, 0])), cicp(12, 13, 0, 1)] }));
+write('hc-then-srgb.png', colourPng({ before: [srgb(9), srgb(1)] }));
+write('hc-then-gama.png', colourPng({ before: [gama(0x80000000), gama(45455)] }));
+write('hc-then-chrm.png', colourPng({ before: [chrm(0x80000000, 32900, 68000, 32000, 26500, 69000, 15000, 6000),
+    chrm(31270, 32900, 68000, 32000, 26500, 69000, 15000, 6000)] }));
+write('hc-then-icc.png', colourPng({ before: [iccp(badIcc), iccp(goodIcc)] }));
+write('hc-then-exif.png', colourPng({ before: [chunk('eXIf', Buffer.from('XX\0*\0\0\0\x08', 'latin1')), exifGood] }));
+write('hc-then-mdcv.png', colourPng({ depth: 16, before: [cicp(9, 16, 0, 1), chunk('mDCV', u16s(1, 2, 3)),
+    chunk('mDCV', Buffer.concat([u16s(35400, 14600, 8500, 39850, 6550, 2300, 15635, 16450), u32s(10000000, 50)]))] }));
+write('hc-then-clli.png', colourPng({ depth: 16, before: [cicp(9, 16, 0, 1), chunk('cLLI', u32s(5)), chunk('cLLI', u32s(10000000, 4000000))] }));
 function u16s(...v) { return Buffer.concat(v.map((x) => { const b = Buffer.alloc(2); b.writeUInt16BE(x); return b; })); }
 // 13. An animated PNG (APNG, the PNG Third Edition's acTL, fcTL and fdAT): its default image is the IDAT, and a decoder
 //     that reads one image leaves the animation's chunks, all ancillary, alone.
