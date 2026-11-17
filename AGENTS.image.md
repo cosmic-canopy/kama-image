@@ -228,6 +228,13 @@ evidence is [RESEARCH.md](RESEARCH.md), its probes in `.scratch/img-probe-*/`. A
 ## Build
 
     kama check kama.json
+    tools/test.sh          # the gate: natively and on wasm under node, each debug and release, and the sweep
+
+**Every leg runs a debug build and a release build** (kyoten's rendering.md § Decided, 2026-11-17, the owner's "(A) Debug
++ release"): a wasm release runs Closure over its JS since kama 0.9.966 (KR-289), and a program ships that build. The
+wasm leg's release build is held to Closure (its JS names no `UTF8ToString`), and its encoded bytes to every other
+leg's. Added in kyoten's thirty-second session: 1,401 cases on it, as on every leg; 2 of 2 mutations caught (the leg
+built in debug, and Closure turned off in the tests' manifest).
 
 On Windows, drive kama from msys2 UCRT64 (kama's `docs/platforms/windows.md`). Where `kama` is not on the `PATH`, use
 kyoten's pin, `../kyoten/tools/kama`.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tools/test.sh — @kama/image's gate: the roadmap's shape, `kama check` on the package and on its tests, then the tests
-# program built debug and release and run natively, and built for the web and run under node, where its fixtures are
-# embedded. Every leg holds every fixture to libpng's answer (tests/src/expected.kama, from tools/reference/run.sh).
+# program built debug and release and run natively, and built for the web, debug and release, and run under node, where
+# its fixtures are embedded. Every leg holds every fixture to libpng's answer (tests/src/expected.kama, from tools/reference/run.sh).
 # Natively, in debug and in release, the sweep then decodes every single-bit flip and every truncation of every fixture
 # libpng decodes, and fails on a trap (tests/src/sweep.kama). tests/kama.json compiles the package and std at the
 # release level in a debug build (debug.optimize), which keeps kama's overflow traps and bounds checks. Last, every leg's
@@ -63,17 +63,28 @@ for mode in debug release; do
     counted "$log" "sweep, native $mode"
 done
 
-step "wasm, under node"
-if command -v emcc >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
-    "$KAMA" build tests/kama.json --target WASM -o tests/out/wasm/imagetests.js >/dev/null
-    log=tests/out/wasm.log
-    (cd tests && node out/wasm/imagetests.js) > "$log" 2>&1 || true
-    grep -E '^(FAIL|image tests:)' "$log" || true
-    counted "$log" "wasm"
-    legs+=("$log")
-else
-    echo "skip the wasm leg: no emcc or node on PATH"
-fi
+# The wasm leg runs a debug build and a release build, as the native legs do (kyoten's rendering.md § Decided,
+# 2026-11-17): a wasm release runs Closure over its JS since kama 0.9.966 (KR-289), and a program ships that build.
+for mode in debug release; do
+    step "wasm, $mode, under node"
+    if command -v emcc >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
+        flag=; [ "$mode" = release ] && flag=--release
+        "$KAMA" build tests/kama.json $flag --target WASM -o "tests/out/wasm-$mode/imagetests.js" >/dev/null
+        log="tests/out/wasm-$mode.log"
+        (cd tests && node "out/wasm-$mode/imagetests.js") > "$log" 2>&1 || true
+        grep -E '^(FAIL|image tests:)' "$log" || true
+        counted "$log" "wasm $mode"
+        legs+=("$log")
+        # A release build's JS that still names emscripten's `UTF8ToString` was never run through Closure, so the leg
+        # would test nothing of what a program ships (a root manifest's `"release": { "closure": false }` does that).
+        if [ "$mode" = release ] && grep -q 'UTF8ToString' "tests/out/wasm-$mode/imagetests.js"; then
+            echo "FAIL the wasm leg, release: its JS still names UTF8ToString, so Closure never ran over it"
+            failed=1
+        fi
+    else
+        echo "skip the wasm leg, $mode: no emcc or node on PATH"
+    fi
+done
 
 # The encoder's promise: the same bytes on every leg. A leg that printed no encoded line fails, so none passes by
 # printing nothing.
